@@ -1,0 +1,27 @@
+{
+  "name": "pluck",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "probe": "tsx scripts/probe-isomorphic-git.ts",
+    "test:repo": "tsx scripts/test-local-repo.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply pluck --local",
+    "db:migrate:remote": "wrangler d1 migrations apply pluck --remote"
+  },
+  "dependencies": {
+    "diff": "^9.0.0",
+    "isomorphic-git": "^1.28.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261003.1",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "wrangler": "^4.43.0"
+  }
+}

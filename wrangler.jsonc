@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pluck-mcp",
+  "workers_dev": false,
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-03",
+  "artifacts": [{
+    "binding": "ARTIFACTS",
+    "namespace": "pluck",
+    "remote": true
+  }],
+  "queues": {
+    "producers": [{ "binding": "INTEGRATION_QUEUE", "queue": "pluck-integration" }],
+    "consumers": [{ "queue": "pluck-integration", "max_batch_size": 1, "max_retries": 3 }]
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "pluck",
+    "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+    "migrations_dir": "migrations"
+  }],
+  "vars": {
+    "MAINLINE_REPO": "mainline"
+  }
+}

@@ -1,4 +1,4 @@
-import { createTwoFilesPatch } from "diff";
+import { createTwoFilesPatch, formatPatch, structuredPatch } from "diff";
 import { isArtifactsPushEvent, readTextSnapshot, type ArtifactFile, type ArtifactsBinding, type ArtifactsPushEvent } from "./artifacts.js";
 import { applyTextPatch } from "./integrator.js";
 import { writeArtifactsCommit, type CommitTrailers } from "./git-write-adapter.js";
@@ -132,11 +132,29 @@ async function integrateJob(job: IntegrationJob, env: Env, recordAttempt: () => 
   return { status: "conflict", detail: `stale-mainline after ${retries + 1} attempts: ${lastDetail}` };
 }
 
-function snapshotPatch(before: ArtifactFile[], after: ArtifactFile[]): string {
+export function snapshotPatch(before: ArtifactFile[], after: ArtifactFile[]): string {
   const oldFiles = new Map(before.map((file) => [file.path, file.content]));
   const newFiles = new Map(after.map((file) => [file.path, file.content]));
   const paths = [...new Set([...oldFiles.keys(), ...newFiles.keys()])].sort();
-  return paths.map((path) => createTwoFilesPatch(`a/${path}`, `b/${path}`, oldFiles.get(path) ?? "", newFiles.get(path) ?? "", "", "")).filter(Boolean).join("");
+  return paths.map((path) => {
+    const oldContent = oldFiles.get(path);
+    const newContent = newFiles.get(path);
+    if (oldContent === undefined) {
+      const patch = structuredPatch("/dev/null", `b/${path}`, "", newContent ?? "", "", "");
+      patch.isGit = true;
+      patch.isCreate = true;
+      patch.newMode = "100644";
+      return formatPatch(patch);
+    }
+    if (newContent === undefined) {
+      const patch = structuredPatch(`a/${path}`, "/dev/null", oldContent, "", "", "");
+      patch.isGit = true;
+      patch.isDelete = true;
+      patch.oldMode = "100644";
+      return formatPatch(patch);
+    }
+    return createTwoFilesPatch(`a/${path}`, `b/${path}`, oldContent, newContent, "", "");
+  }).filter(Boolean).join("");
 }
 
 function findContext(files: ArtifactFile[]): string {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { isArtifactsPushEvent, readTextSnapshot } from "../src/artifacts.js";
 import { jobFromPushEvent } from "../src/queue.js";
-import { isWorkspacePushEvent } from "../src/worker.js";
+import { isWorkspacePushEvent, snapshotPatch } from "../src/worker.js";
+import { applyTextPatch } from "../src/integrator.js";
 
 describe("Cloudflare integration contracts", () => {
   it("accepts and normalizes an Artifacts push event", () => {
@@ -98,5 +99,24 @@ describe("Cloudflare integration contracts", () => {
     };
 
     await expect(readTextSnapshot(repo, "commit")).rejects.toThrow("Binary blob is not supported at logo.bin");
+  });
+
+  it("emits and applies an explicit new-file patch", () => {
+    const patch = snapshotPatch(
+      [{ path: "README.md", blob: "base", content: "# app\n" }],
+      [
+        { path: "README.md", blob: "base", content: "# app\n" },
+        { path: "src/new.ts", blob: "new", content: "export const added = true;\n" },
+      ],
+    );
+
+    expect(patch).toContain("new file mode 100644");
+    expect(applyTextPatch(patch, [{ path: "README.md", content: "# app\n" }])).toEqual({
+      status: "applied",
+      files: [
+        { path: "README.md", content: "# app\n" },
+        { path: "src/new.ts", content: "export const added = true;\n" },
+      ],
+    });
   });
 });

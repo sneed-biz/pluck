@@ -3,6 +3,7 @@ import path from "node:path";
 import git from "isomorphic-git";
 import { createTwoFilesPatch } from "diff";
 import { applyTextPatch } from "../src/integrator.js";
+import { snapshotPatch } from "../src/worker.js";
 
 const dir = path.resolve("iso-test-app");
 
@@ -37,8 +38,10 @@ await write("src/app.ts", "export const greeting = 'hello';\nexport const versio
 const base = await commit("chore: seed fixture");
 
 await write("src/app.ts", "export const greeting = 'hello from agent';\nexport const version = 1;\n");
-const agentCommit = await commit("feat: customize greeting");
+await write("src/new.ts", "export const added = true;\n");
+const agentCommit = await commit("feat: customize greeting", ["src/app.ts", "src/new.ts"]);
 const agentContent = await readCommitFile(agentCommit, "src/app.ts");
+const newFileContent = await readCommitFile(agentCommit, "src/new.ts");
 const baseContent = await readCommitFile(base, "src/app.ts");
 
 await git.checkout({ fs, dir, ref: "main" });
@@ -47,9 +50,19 @@ await git.checkout({ fs, dir, ref: base, force: true });
 await write("README.md", "# iso-test-app\n\nMainline documentation.\n");
 const mainlineCommit = await commit("docs: describe fixture", ["README.md"]);
 const mainlineContent = await readCommitFile(mainlineCommit, "src/app.ts");
+const readmeContent = await readCommitFile(mainlineCommit, "README.md");
 
-const patch = createTwoFilesPatch("a/src/app.ts", "b/src/app.ts", baseContent, agentContent);
-const result = applyTextPatch(patch, [{ path: "src/app.ts", content: mainlineContent }]);
+const patch = snapshotPatch(
+  [{ path: "src/app.ts", blob: "base", content: baseContent }],
+  [
+    { path: "src/app.ts", blob: "agent", content: agentContent },
+    { path: "src/new.ts", blob: "new", content: newFileContent },
+  ],
+);
+const result = applyTextPatch(patch, [
+  { path: "README.md", content: readmeContent },
+  { path: "src/app.ts", content: mainlineContent },
+]);
 
 await git.checkout({ fs, dir, ref: base, force: true });
 await write("src/app.ts", "export const greeting = 'hello from another agent';\nexport const version = 1;\n");
@@ -85,7 +98,11 @@ console.log(JSON.stringify({
   resolutionResult,
 }, null, 2));
 
-if (result.status !== "applied" || !result.files[0]?.content.includes("hello from agent") || !result.files[0]?.content.includes("version = 1")) {
+if (
+  result.status !== "applied" ||
+  !result.files.find((file) => file.path === "src/app.ts")?.content.includes("hello from agent") ||
+  !result.files.find((file) => file.path === "src/new.ts")?.content.includes("added = true")
+) {
   throw new Error("Local Pluck integration fixture failed");
 }
 if (conflictResult.status !== "conflict") throw new Error("Conflict fixture failed");

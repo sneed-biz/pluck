@@ -84,4 +84,42 @@ describe("applyTextPatch", () => {
       files: [{ path: "src/a.ts", content: "export const greeting = 'hello from agents A and B';\n" }],
     });
   });
+
+  it("applies a strict new-file patch", () => {
+    const patch = [
+      "diff --git a/src/new.ts b/src/new.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/new.ts",
+      "@@ -0,0 +1,2 @@",
+      "+export const added = true;",
+      "+",
+      "",
+    ].join("\n");
+
+    expect(applyTextPatch(patch, [{ path: "README.md", content: "# app\n" }])).toEqual({
+      status: "applied",
+      files: [
+        { path: "README.md", content: "# app\n" },
+        { path: "src/new.ts", content: "export const added = true;\n\n" },
+      ],
+    });
+  });
+
+  it("rejects a new-file patch when the target already exists", () => {
+    const patch = [
+      "diff --git a/src/new.ts b/src/new.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/new.ts",
+      "@@ -0,0 +1 @@",
+      "+export const added = true;",
+      "",
+    ].join("\n");
+
+    expect(applyTextPatch(patch, [{ path: "src/new.ts", content: "different\n" }])).toEqual({
+      status: "conflict",
+      conflicts: [{ path: "src/new.ts", reason: "file-exists" }],
+    });
+  });
 });

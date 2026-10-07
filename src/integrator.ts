@@ -23,7 +23,7 @@ export type TextFile = {
 
 export type PatchConflict = {
   path: string;
-  reason: "binary" | "missing-source" | "hunk-mismatch";
+  reason: "binary" | "missing-source" | "file-exists" | "hunk-mismatch";
 };
 
 export type PatchResult =
@@ -49,6 +49,12 @@ export function applyTextPatch(patchText: string, files: TextFile[]): PatchResul
         return;
       }
       if (patch.isCreate) {
+        const targetPath = stripGitPrefix(patch.newFileName ?? "");
+        if (byPath.has(targetPath)) {
+          conflicts.push({ path: targetPath, reason: "file-exists" });
+          callback(`Target file already exists in mainline: ${targetPath}`, "");
+          return;
+        }
         callback(undefined, "");
         return;
       }
@@ -76,7 +82,11 @@ export function applyTextPatch(patchText: string, files: TextFile[]): PatchResul
       if (error && conflicts.length === 0) {
         conflicts.push({
           path: "unknown",
-          reason: /missing/i.test(String(error)) ? "missing-source" : "hunk-mismatch",
+          reason: /already exists/i.test(String(error))
+            ? "file-exists"
+            : /missing/i.test(String(error))
+              ? "missing-source"
+              : "hunk-mismatch",
         });
       }
     },

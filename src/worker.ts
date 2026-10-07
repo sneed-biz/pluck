@@ -53,7 +53,7 @@ export default {
       }
 
       try {
-        const result = await integrateJob(job, env);
+        const result = await integrateJob(job, env, () => store.recordAttempt(job.id));
         if (result.status === "integrated") await store.update(job.id, "integrated", result.commit);
         else await store.update(job.id, "conflict", result.detail);
         message.ack();
@@ -85,7 +85,7 @@ async function inspectIntegrationInputs(job: IntegrationJob, env: Env): Promise<
 
 type IntegrationAttempt = { status: "integrated"; commit: string } | { status: "conflict"; detail: string };
 
-async function integrateJob(job: IntegrationJob, env: Env): Promise<IntegrationAttempt> {
+async function integrateJob(job: IntegrationJob, env: Env, recordAttempt: () => Promise<number>): Promise<IntegrationAttempt> {
   const source = await env.ARTIFACTS.get(job.sourceRepo);
   const mainline = await env.ARTIFACTS.get(env.MAINLINE_REPO);
   const sourceCommit = await source.readCommit(job.sourceCommit);
@@ -107,8 +107,9 @@ async function integrateJob(job: IntegrationJob, env: Env): Promise<IntegrationA
   let lastDetail = "stale mainline";
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    await recordAttempt();
     const mainlineInfo = await mainline.info();
-    const mainlineCommit = await mainline.readCommit(mainlineInfo.defaultBranch);
+    const mainlineCommit = (await mainline.log({ ref: mainlineInfo.defaultBranch, limit: 1 }))[0] ?? null;
     if (!mainlineCommit) throw new Error(`Mainline branch not found: ${mainlineInfo.defaultBranch}`);
     const mainlineFiles = await readTextSnapshot(mainline, mainlineInfo.defaultBranch);
     const applied = applyTextPatch(patch, mainlineFiles);
@@ -135,7 +136,7 @@ function snapshotPatch(before: ArtifactFile[], after: ArtifactFile[]): string {
   const oldFiles = new Map(before.map((file) => [file.path, file.content]));
   const newFiles = new Map(after.map((file) => [file.path, file.content]));
   const paths = [...new Set([...oldFiles.keys(), ...newFiles.keys()])].sort();
-  return paths.map((path) => createTwoFilesPatch(path, path, oldFiles.get(path) ?? "", newFiles.get(path) ?? "", "", "")).filter(Boolean).join("");
+  return paths.map((path) => createTwoFilesPatch(`a/${path}`, `b/${path}`, oldFiles.get(path) ?? "", newFiles.get(path) ?? "", "", "")).filter(Boolean).join("");
 }
 
 function findContext(files: ArtifactFile[]): string {

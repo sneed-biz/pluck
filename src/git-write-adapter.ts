@@ -192,7 +192,7 @@ function toBytes(content: string | Uint8Array): Uint8Array {
   return typeof content === "string" ? new TextEncoder().encode(content) : content;
 }
 
-class MemoryFs {
+export class MemoryFs {
   readonly promises = new MemoryPromises();
   readFile = this.promises.readFile.bind(this.promises);
   writeFile = this.promises.writeFile.bind(this.promises);
@@ -200,20 +200,38 @@ class MemoryFs {
   readdir = this.promises.readdir.bind(this.promises);
   mkdir = this.promises.mkdir.bind(this.promises);
   rmdir = this.promises.rmdir.bind(this.promises);
+  rm = this.promises.rm.bind(this.promises);
+  exists = this.promises.exists.bind(this.promises);
   stat = this.promises.stat.bind(this.promises);
   lstat = this.promises.lstat.bind(this.promises);
+  readlink = this.promises.readlink.bind(this.promises);
+  symlink = this.promises.symlink.bind(this.promises);
 }
 
 class MemoryPromises {
   private readonly files = new Map<string, Uint8Array>();
-  async readFile(path: string): Promise<Uint8Array> { const value = this.files.get(normalize(path)); if (!value) throw new Error("ENOENT"); return value.slice(); }
+  async readFile(path: string, options?: { encoding?: string } | string): Promise<Uint8Array | string> {
+    const value = this.files.get(normalize(path));
+    if (!value) throw fsError("ENOENT", path);
+    return (typeof options === "string" || options?.encoding) ? new TextDecoder().decode(value) : value.slice();
+  }
   async writeFile(path: string, data: Uint8Array | string): Promise<void> { this.files.set(normalize(path), typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data)); }
   async unlink(path: string): Promise<void> { this.files.delete(normalize(path)); }
   async readdir(path: string): Promise<string[]> { const prefix = `${normalize(path)}/`; return [...new Set([...this.files.keys()].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length).split("/")[0]))]; }
   async mkdir(): Promise<void> {}
   async rmdir(): Promise<void> {}
-  async stat(path: string): Promise<{ isFile(): boolean; isDirectory(): boolean; size: number }> { const normalized = normalize(path); const file = this.files.get(normalized); if (file) return { isFile: () => true, isDirectory: () => false, size: file.length }; if ([...this.files.keys()].some((key) => key.startsWith(`${normalized}/`))) return { isFile: () => false, isDirectory: () => true, size: 0 }; throw new Error("ENOENT"); }
+  async stat(path: string): Promise<{ isFile(): boolean; isDirectory(): boolean; size: number }> { const normalized = normalize(path); const file = this.files.get(normalized); if (file) return { isFile: () => true, isDirectory: () => false, size: file.length }; if ([...this.files.keys()].some((key) => key.startsWith(`${normalized}/`))) return { isFile: () => false, isDirectory: () => true, size: 0 }; throw fsError("ENOENT", path); }
   lstat = this.stat.bind(this);
+  async readlink(path: string): Promise<string> { throw fsError("EINVAL", path); }
+  async symlink(_target: string, path: string): Promise<void> { throw fsError("EINVAL", path); }
+  async rm(path: string): Promise<void> { await this.unlink(path); }
+  async exists(path: string): Promise<boolean> { try { await this.stat(path); return true; } catch { return false; } }
+}
+
+function fsError(code: string, path: string): Error & { code: string } {
+  const error = new Error(`${code}: ${path}`) as Error & { code: string };
+  error.code = code;
+  return error;
 }
 
 function normalize(path: string): string { return path.replace(/^\/+/, "").replace(/\/+/g, "/"); }

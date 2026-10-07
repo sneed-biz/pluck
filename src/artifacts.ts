@@ -1,4 +1,4 @@
-export type ArtifactRepo = Pick<ArtifactsRepo, "readBlob" | "readCommit" | "readTree">;
+export type ArtifactRepo = Pick<ArtifactsRepo, "readBlob" | "readCommit" | "readTree"> & Partial<Pick<ArtifactsRepo, "log">>;
 export type ArtifactsBinding = Pick<Artifacts, "create" | "get">;
 
 export type ArtifactFile = {
@@ -34,12 +34,18 @@ export function isArtifactsPushEvent(value: unknown): value is ArtifactsPushEven
 }
 
 export async function readTextSnapshot(repo: ArtifactRepo, ref: string): Promise<ArtifactFile[]> {
-  const commit = await repo.readCommit(ref);
+  const commit = await resolveCommit(repo, ref);
   if (!commit) throw new Error(`Commit not found: ${ref}`);
 
   const files: ArtifactFile[] = [];
   await walkTree(repo, commit.treeHash, "", files);
   return files.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+async function resolveCommit(repo: ArtifactRepo, ref: string) {
+  if (/^[0-9a-f]{40}$/.test(ref)) return repo.readCommit(ref);
+  if ("log" in repo && typeof repo.log === "function") return (await repo.log({ ref, limit: 1 }))[0] ?? null;
+  return repo.readCommit(ref);
 }
 
 async function walkTree(repo: ArtifactRepo, treeHash: string, prefix: string, files: ArtifactFile[]) {

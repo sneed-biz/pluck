@@ -5,11 +5,13 @@ export type JobStatus = "queued" | "processing" | "blocked" | "conflict" | "inte
 export type JobRecord = IntegrationJob & {
   status: JobStatus;
   detail: string | null;
+  attemptCount: number;
 };
 
 export type JobStore = {
   enqueue(job: IntegrationJob): Promise<boolean>;
   claim(job: IntegrationJob): Promise<boolean>;
+  recordAttempt(jobId: string): Promise<number>;
   update(jobId: string, status: Exclude<JobStatus, "queued" | "processing">, detail?: string): Promise<void>;
 };
 
@@ -35,6 +37,15 @@ export class D1JobStore implements JobStore {
       .bind(job.id)
       .run();
     return result.meta.changes === 1;
+  }
+
+  async recordAttempt(jobId: string): Promise<number> {
+    const result = await this.db
+      .prepare("UPDATE integration_jobs SET attempt_count = attempt_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING attempt_count")
+      .bind(jobId)
+      .first<{ attempt_count: number }>();
+    if (!result) throw new Error(`Job not found: ${jobId}`);
+    return result.attempt_count;
   }
 
   async update(jobId: string, status: Exclude<JobStatus, "queued" | "processing">, detail?: string): Promise<void> {

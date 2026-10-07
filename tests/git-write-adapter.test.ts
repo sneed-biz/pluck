@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { writeArtifactsCommit } from "../src/git-write-adapter.js";
+import { MemoryFs, writeArtifactsCommit } from "../src/git-write-adapter.js";
 
 function repo() {
   return {
@@ -29,6 +29,15 @@ const baseRequest = {
 };
 
 describe("writeArtifactsCommit", () => {
+  it("uses filesystem errors with Node-compatible codes", async () => {
+    const fs = new MemoryFs();
+
+    await expect(fs.promises.stat("missing")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.promises.readlink("file")).rejects.toMatchObject({ code: "EINVAL" });
+    await fs.promises.writeFile("text", "hello");
+    await expect(fs.promises.readFile("text", { encoding: "utf8" })).resolves.toBe("hello");
+  });
+
   it("rejects unsafe paths before accessing the repository", async () => {
     const request = { ...baseRequest, files: [{ path: "../escape", content: "nope" }] };
     const result = await writeArtifactsCommit(request);

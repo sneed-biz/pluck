@@ -1,4 +1,7 @@
-import { isArtifactsPushEvent, readTextSnapshot, type ArtifactsBinding, type ArtifactsPushEvent } from "./artifacts.js";
+import { createTwoFilesPatch } from "diff";
+import { isArtifactsPushEvent, readTextSnapshot, type ArtifactFile, type ArtifactsBinding, type ArtifactsPushEvent } from "./artifacts.js";
+import { applyTextPatch } from "./integrator.js";
+import { writeArtifactsCommit, type CommitTrailers } from "./git-write-adapter.js";
 import { jobFromPushEvent, type IntegrationJob } from "./queue.js";
 import { D1JobStore } from "./state.js";
 
@@ -8,7 +11,10 @@ export type Env = {
   DB: D1Database;
   MAINLINE_REPO: string;
   BOOTSTRAP_TOKEN: string;
+  MAX_STALE_RETRIES?: string;
 };
+
+const DEFAULT_STALE_RETRIES = 3;
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -47,8 +53,9 @@ export default {
       }
 
       try {
-        await inspectIntegrationInputs(job, env);
-        await store.update(job.id, "blocked", "Artifacts snapshot is ready; commit/push adapter is not implemented yet");
+        const result = await integrateJob(job, env);
+        if (result.status === "integrated") await store.update(job.id, "integrated", result.commit);
+        else await store.update(job.id, "conflict", result.detail);
         message.ack();
       } catch (error) {
         await store.update(job.id, "conflict", error instanceof Error ? error.message : String(error));
@@ -74,4 +81,65 @@ async function inspectIntegrationInputs(job: IntegrationJob, env: Env): Promise<
   await readTextSnapshot(source, job.sourceCommit);
   const mainlineInfo = await mainline.info();
   await readTextSnapshot(mainline, mainlineInfo.defaultBranch);
+}
+
+type IntegrationAttempt = { status: "integrated"; commit: string } | { status: "conflict"; detail: string };
+
+async function integrateJob(job: IntegrationJob, env: Env): Promise<IntegrationAttempt> {
+  const source = await env.ARTIFACTS.get(job.sourceRepo);
+  const mainline = await env.ARTIFACTS.get(env.MAINLINE_REPO);
+  const sourceCommit = await source.readCommit(job.sourceCommit);
+  if (!sourceCommit) throw new Error(`Source commit not found: ${job.sourceCommit}`);
+  if (sourceCommit.parents.length !== 1 || sourceCommit.parents[0] !== job.beforeCommit) {
+    throw new Error(`Push is not a single-parent change from ${job.beforeCommit}`);
+  }
+
+  const sourceFiles = await readTextSnapshot(source, job.sourceCommit);
+  const parentFiles = await readTextSnapshot(source, job.beforeCommit);
+  const patch = snapshotPatch(parentFiles, sourceFiles);
+  const trailers: CommitTrailers = {
+    task: job.id,
+    workspace: job.sourceNamespace,
+    sourceCommit: job.sourceCommit,
+    context: findContext(sourceFiles),
+  };
+  const retries = Math.max(0, Number(env.MAX_STALE_RETRIES ?? DEFAULT_STALE_RETRIES));
+  let lastDetail = "stale mainline";
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const mainlineInfo = await mainline.info();
+    const mainlineCommit = await mainline.readCommit(mainlineInfo.defaultBranch);
+    if (!mainlineCommit) throw new Error(`Mainline branch not found: ${mainlineInfo.defaultBranch}`);
+    const mainlineFiles = await readTextSnapshot(mainline, mainlineInfo.defaultBranch);
+    const applied = applyTextPatch(patch, mainlineFiles);
+    if (applied.status === "conflict") return { status: "conflict", detail: JSON.stringify(applied.conflicts) };
+
+    const result = await writeArtifactsCommit({
+      repo: mainline,
+      parent: mainlineCommit.hash,
+      branch: mainlineInfo.defaultBranch,
+      files: applied.files,
+      message: `Integrate ${job.sourceRepo}`,
+      author: sourceCommit.author,
+      committer: { name: "Pluck", email: "pluck@example.com" },
+      trailers,
+    });
+    if (result.status === "pushed") return { status: "integrated", commit: result.commit };
+    if (result.status !== "stale-mainline") return { status: "conflict", detail: result.detail };
+    lastDetail = result.detail;
+  }
+  return { status: "conflict", detail: `stale-mainline after ${retries + 1} attempts: ${lastDetail}` };
+}
+
+function snapshotPatch(before: ArtifactFile[], after: ArtifactFile[]): string {
+  const oldFiles = new Map(before.map((file) => [file.path, file.content]));
+  const newFiles = new Map(after.map((file) => [file.path, file.content]));
+  const paths = [...new Set([...oldFiles.keys(), ...newFiles.keys()])].sort();
+  return paths.map((path) => createTwoFilesPatch(path, path, oldFiles.get(path) ?? "", newFiles.get(path) ?? "", "", "")).filter(Boolean).join("");
+}
+
+function findContext(files: ArtifactFile[]): string {
+  const context = files.find((file) => file.path === ".agent/context.md");
+  if (!context) throw new Error("Required .agent/context.md is missing");
+  return context.content.trim();
 }

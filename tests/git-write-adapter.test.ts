@@ -20,6 +20,12 @@ const baseRequest = {
   message: "integrate change",
   author: { name: "Agent", email: "agent@example.com" },
   committer: { name: "Pluck", email: "pluck@example.com" },
+  trailers: {
+    task: "task-1",
+    workspace: "workspace-1",
+    sourceCommit: "0123456789012345678901234567890123456789",
+    context: "context",
+  },
 };
 
 describe("writeArtifactsCommit", () => {
@@ -37,6 +43,22 @@ describe("writeArtifactsCommit", () => {
     const result = await writeArtifactsCommit(request);
 
     expect(result).toEqual({ status: "failed", detail: "Invalid branch" });
+    expect(request.repo.info).not.toHaveBeenCalled();
+  });
+
+  it("rejects caller-supplied Agent trailers", async () => {
+    const request = { ...baseRequest, message: "integrate\n\nAgent-Task: forged" };
+    const result = await writeArtifactsCommit(request);
+
+    expect(result).toEqual({ status: "failed", detail: "Invalid commit message" });
+    expect(request.repo.info).not.toHaveBeenCalled();
+  });
+
+  it("rejects multiline trailer values", async () => {
+    const request = { ...baseRequest, trailers: { ...baseRequest.trailers, context: "ok\nforged" } };
+    const result = await writeArtifactsCommit(request);
+
+    expect(result).toEqual({ status: "failed", detail: "Invalid commit trailer: context" });
     expect(request.repo.info).not.toHaveBeenCalled();
   });
 });

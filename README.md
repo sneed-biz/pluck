@@ -34,4 +34,4 @@ The probe reports whether the installed `isomorphic-git` version exposes a patch
 6. Create a new mainline commit with `Agent-Task`, `Agent-Workspace`, `Agent-Source-Commit`, and `Agent-Context` trailers.
 7. Push only after the complete tree is available; otherwise record a conflict and push nothing.
 
-The current Worker stops after verified snapshot inspection with a `blocked` job status because the public Artifacts binding currently exposes reads and forks, but not a direct commit/write operation. The next adapter must use the returned Git remote/token with a Workers-compatible Git writer or a newly verified Artifacts write API.
+The Worker uses the returned Git remote and short-lived token with a Workers-compatible Git writer. It retries stale compare-and-swap pushes three times; exhaustion is recorded as a terminal `conflict`. Every successful commit includes structured `Agent-*` trailers, and no remote push is forced.

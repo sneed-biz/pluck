@@ -22,7 +22,15 @@ export type GitWriteRequest = {
   message: string;
   author: GitIdentity;
   committer: GitIdentity;
+  trailers: CommitTrailers;
   tokenTtlSeconds?: number;
+};
+
+export type CommitTrailers = {
+  task: string;
+  workspace: string;
+  sourceCommit: string;
+  context: string;
 };
 
 export type GitWriteResult =
@@ -49,7 +57,7 @@ export async function writeArtifactsCommit(input: GitWriteRequest): Promise<GitW
     const commit: CommitObject = {
       tree,
       parent: [input.parent],
-      message: input.message,
+      message: formatCommitMessage(input.message, input.trailers),
       author: identity(input.author, now),
       committer: identity(input.committer, now),
     };
@@ -165,6 +173,15 @@ function validateRequest(input: GitWriteRequest): void {
   for (const file of input.files) {
     if (!file.path || file.path.startsWith("/") || file.path.includes("..") || file.path.endsWith("/")) throw new Error(`Invalid file path: ${file.path}`);
   }
+  for (const [name, value] of Object.entries(input.trailers)) {
+    if (!value.trim() || /[\r\n]/.test(value)) throw new Error(`Invalid commit trailer: ${name}`);
+  }
+  formatCommitMessage(input.message, input.trailers);
+}
+
+function formatCommitMessage(message: string, trailers: CommitTrailers): string {
+  if (!message.trim() || /\nAgent-(?:Task|Workspace|Source-Commit|Context):/i.test(message)) throw new Error("Invalid commit message");
+  return `${message.trim()}\n\nAgent-Task: ${trailers.task}\nAgent-Workspace: ${trailers.workspace}\nAgent-Source-Commit: ${trailers.sourceCommit}\nAgent-Context: ${trailers.context}`;
 }
 
 function identity(value: GitIdentity, now: number) {

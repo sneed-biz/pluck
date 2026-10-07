@@ -2,6 +2,8 @@
 
 Pluck is an MCP-native coordination layer for Cloudflare Artifacts. This repository contains the patch integration spike and the first Cloudflare Worker vertical slice.
 
+Pluck is inspired by Cloudflare's [Artifacts Git platform](https://blog.cloudflare.com/next-git-platform-on-cloudflare/). The implementation in this repository is independently authored and is licensed under the MIT License.
+
 ## Run the spike
 
 ```sh

@@ -1,3 +1,5 @@
+import { retryArtifactRead } from "./retry.js";
+
 export type ArtifactRepo = Pick<ArtifactsRepo, "readBlob" | "readCommit" | "readTree"> & Partial<Pick<ArtifactsRepo, "log">>;
 export type ArtifactsBinding = Pick<Artifacts, "create" | "get">;
 
@@ -43,13 +45,13 @@ export async function readTextSnapshot(repo: ArtifactRepo, ref: string): Promise
 }
 
 async function resolveCommit(repo: ArtifactRepo, ref: string) {
-  if (/^[0-9a-f]{40}$/.test(ref)) return repo.readCommit(ref);
-  if ("log" in repo && typeof repo.log === "function") return (await repo.log({ ref, limit: 1 }))[0] ?? null;
-  return repo.readCommit(ref);
+  if (/^[0-9a-f]{40}$/.test(ref)) return retryArtifactRead(() => repo.readCommit(ref));
+  if ("log" in repo && typeof repo.log === "function") return (await retryArtifactRead(() => repo.log!({ ref, limit: 1 })))[0] ?? null;
+  return retryArtifactRead(() => repo.readCommit(ref));
 }
 
 async function walkTree(repo: ArtifactRepo, treeHash: string, prefix: string, files: ArtifactFile[]) {
-  const entries = await repo.readTree(treeHash);
+  const entries = await retryArtifactRead(() => repo.readTree(treeHash));
   if (!entries) throw new Error(`Tree not found: ${treeHash}`);
 
   for (const entry of entries) {
@@ -62,7 +64,7 @@ async function walkTree(repo: ArtifactRepo, treeHash: string, prefix: string, fi
       throw new ArtifactSnapshotError(`Unsupported tree entry at ${path}: ${entry.type}`);
     }
 
-    const blob = await repo.readBlob(entry.hash);
+    const blob = await retryArtifactRead(() => repo.readBlob(entry.hash));
     if (!blob) throw new Error(`Blob not found: ${entry.hash}`);
     if (blob.type && !blob.type.startsWith("text/")) {
       throw new ArtifactSnapshotError(`Binary blob is not supported at ${path}`);

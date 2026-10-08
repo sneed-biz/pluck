@@ -1,5 +1,6 @@
 import git, { type CommitObject, type FsClient, type TreeObject } from "isomorphic-git";
 import http from "isomorphic-git/http/web";
+import { retryArtifactRead } from "./retry.js";
 
 export type WriteFile = {
   path: string;
@@ -97,7 +98,7 @@ export async function writeArtifactsCommit(input: GitWriteRequest): Promise<GitW
 }
 
 async function importCommit(repo: ArtifactsWriteRepo, fs: FsClient, dir: string, sha: string): Promise<void> {
-  const commit = await repo.readCommit(sha);
+  const commit = await retryArtifactRead(() => repo.readCommit(sha));
   if (!commit) throw new Error(`Parent commit not found: ${sha}`);
   const tree = await importTree(repo, fs, dir, commit.treeHash);
   await git.writeCommit({
@@ -111,18 +112,17 @@ async function importCommit(repo: ArtifactsWriteRepo, fs: FsClient, dir: string,
       committer: { ...commit.committer, timestamp: commit.committedAt, timezoneOffset: 0 },
     },
   });
-  for (const parent of commit.parents) await importCommit(repo, fs, dir, parent);
 }
 
 async function importTree(repo: ArtifactsWriteRepo, fs: FsClient, dir: string, sha: string): Promise<string> {
-  const entries = await repo.readTree(sha);
+  const entries = await retryArtifactRead(() => repo.readTree(sha));
   if (!entries) throw new Error(`Tree not found: ${sha}`);
   const tree: TreeObject = [];
   for (const entry of entries) {
     if (entry.type === "tree") {
       tree.push({ mode: entry.mode, path: entry.name, oid: await importTree(repo, fs, dir, entry.hash), type: "tree" });
     } else if (entry.type === "blob" || entry.type === "exec") {
-      const blob = await repo.readBlob(entry.hash);
+      const blob = await retryArtifactRead(() => repo.readBlob(entry.hash));
       if (!blob) throw new Error(`Blob not found: ${entry.hash}`);
       tree.push({ mode: entry.mode, path: entry.name, oid: await git.writeBlob({ fs, dir, blob: new Uint8Array(await blob.arrayBuffer()) }), type: "blob" });
     } else {

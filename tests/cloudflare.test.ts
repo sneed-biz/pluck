@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isArtifactsPushEvent, readTextSnapshot } from "../src/artifacts.js";
 import { jobFromPushEvent } from "../src/queue.js";
-import { isWorkspacePushEvent, snapshotPatch } from "../src/worker.js";
+import { isSafeIntegrationTarget, isWorkspacePushEvent, snapshotPatch } from "../src/worker.js";
 import { applyTextPatch } from "../src/integrator.js";
 
 describe("Cloudflare integration contracts", () => {
@@ -40,6 +40,12 @@ describe("Cloudflare integration contracts", () => {
     expect(isWorkspacePushEvent({ ...event, source: { ...event.source, repoName: "task-1" } }, "mainline")).toBe(true);
   });
 
+  it("requires explicit opt-in before targeting the production mainline name", () => {
+    expect(isSafeIntegrationTarget({ MAINLINE_REPO: "mainline" })).toBe(false);
+    expect(isSafeIntegrationTarget({ MAINLINE_REPO: "mainline", ALLOW_PRODUCTION_MAINLINE: "true" })).toBe(true);
+    expect(isSafeIntegrationTarget({ MAINLINE_REPO: "isolated-mainline" })).toBe(true);
+  });
+
   it("walks a Cloudflare Artifacts commit tree into a text snapshot", async () => {
     const repo = {
       readCommit: async () => ({
@@ -61,6 +67,31 @@ describe("Cloudflare integration contracts", () => {
     await expect(readTextSnapshot(repo, "commit")).resolves.toEqual([
       { path: "src/app.ts", blob: "blob", content: "export const ok = true;" },
     ]);
+  });
+
+  it("retries transient commit, tree, and blob reads", async () => {
+    let commits = 0;
+    let trees = 0;
+    let blobs = 0;
+    const repo = {
+      readCommit: async () => {
+        if (++commits < 2) throw new Error("eventual consistency");
+        return { hash: "commit", treeHash: "root", message: "fixture", author: { name: "a", email: "a@example.com" }, committer: { name: "a", email: "a@example.com" }, parents: [], authoredAt: 0, committedAt: 0 };
+      },
+      readTree: async () => {
+        if (++trees < 2) throw new Error("eventual consistency");
+        return [{ name: "app.ts", mode: "100644", hash: "blob", type: "blob" as const }];
+      },
+      readBlob: async () => {
+        if (++blobs < 2) throw new Error("eventual consistency");
+        return new Blob(["export const ok = true;"], { type: "text/plain" });
+      },
+    };
+
+    await expect(readTextSnapshot(repo, "commit")).resolves.toEqual([{ path: "app.ts", blob: "blob", content: "export const ok = true;" }]);
+    expect(commits).toBe(2);
+    expect(trees).toBe(2);
+    expect(blobs).toBe(2);
   });
 
   it("fails instead of dropping binary blobs from a snapshot", async () => {

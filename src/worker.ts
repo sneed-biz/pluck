@@ -4,12 +4,14 @@ import { applyTextPatch } from "./integrator.js";
 import { writeArtifactsCommit, type CommitTrailers } from "./git-write-adapter.js";
 import { jobFromPushEvent, type IntegrationJob } from "./queue.js";
 import { D1JobStore } from "./state.js";
+import { retryArtifactRead } from "./retry.js";
 
 export type Env = {
   ARTIFACTS: ArtifactsBinding;
   INTEGRATION_QUEUE: Queue<IntegrationJob>;
   DB: D1Database;
   MAINLINE_REPO: string;
+  ALLOW_PRODUCTION_MAINLINE?: string;
   BOOTSTRAP_TOKEN: string;
   MAX_STALE_RETRIES?: string;
 };
@@ -33,7 +35,11 @@ export default {
     }
 
     const body: unknown = await request.json().catch(() => null);
-    if (!isArtifactsPushEvent(body) || !isWorkspacePushEvent(body, env.MAINLINE_REPO)) {
+    if (
+      !isArtifactsPushEvent(body) ||
+      !isWorkspacePushEvent(body, env.MAINLINE_REPO) ||
+      !isSafeIntegrationTarget(env)
+    ) {
       return Response.json({ error: "invalid_artifacts_push_event" }, { status: 400 });
     }
 
@@ -69,10 +75,14 @@ export function isWorkspacePushEvent(event: ArtifactsPushEvent, mainlineRepo: st
   return event.payload.ref === "refs/heads/main" && event.source.repoName !== mainlineRepo;
 }
 
+export function isSafeIntegrationTarget(env: Pick<Env, "MAINLINE_REPO" | "ALLOW_PRODUCTION_MAINLINE">): boolean {
+  return env.MAINLINE_REPO !== "mainline" || env.ALLOW_PRODUCTION_MAINLINE === "true";
+}
+
 async function inspectIntegrationInputs(job: IntegrationJob, env: Env): Promise<void> {
   const source = await env.ARTIFACTS.get(job.sourceRepo);
   const mainline = await env.ARTIFACTS.get(env.MAINLINE_REPO);
-  const sourceCommit = await source.readCommit(job.sourceCommit);
+  const sourceCommit = await retryArtifactRead(() => source.readCommit(job.sourceCommit));
   if (!sourceCommit) throw new Error(`Source commit not found: ${job.sourceCommit}`);
   if (sourceCommit.parents.length !== 1 || sourceCommit.parents[0] !== job.beforeCommit) {
     throw new Error(`Push is not a single-parent change from ${job.beforeCommit}`);
@@ -88,7 +98,7 @@ type IntegrationAttempt = { status: "integrated"; commit: string } | { status: "
 async function integrateJob(job: IntegrationJob, env: Env, recordAttempt: () => Promise<number>): Promise<IntegrationAttempt> {
   const source = await env.ARTIFACTS.get(job.sourceRepo);
   const mainline = await env.ARTIFACTS.get(env.MAINLINE_REPO);
-  const sourceCommit = await source.readCommit(job.sourceCommit);
+  const sourceCommit = await retryArtifactRead(() => source.readCommit(job.sourceCommit));
   if (!sourceCommit) throw new Error(`Source commit not found: ${job.sourceCommit}`);
   if (sourceCommit.parents.length !== 1 || sourceCommit.parents[0] !== job.beforeCommit) {
     throw new Error(`Push is not a single-parent change from ${job.beforeCommit}`);
@@ -109,7 +119,7 @@ async function integrateJob(job: IntegrationJob, env: Env, recordAttempt: () => 
   for (let attempt = 0; attempt <= retries; attempt++) {
     await recordAttempt();
     const mainlineInfo = await mainline.info();
-    const mainlineCommit = (await mainline.log({ ref: mainlineInfo.defaultBranch, limit: 1 }))[0] ?? null;
+    const mainlineCommit = (await retryArtifactRead(() => mainline.log({ ref: mainlineInfo.defaultBranch, limit: 1 })))[0] ?? null;
     if (!mainlineCommit) throw new Error(`Mainline branch not found: ${mainlineInfo.defaultBranch}`);
     const mainlineFiles = await readTextSnapshot(mainline, mainlineInfo.defaultBranch);
     const applied = applyTextPatch(patch, mainlineFiles);

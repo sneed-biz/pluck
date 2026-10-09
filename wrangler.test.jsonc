@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pluck-mcp-test",
+  "workers_dev": true,
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-03",
+  "artifacts": [{
+    "binding": "ARTIFACTS",
+    "namespace": "pluck-test",
+    "remote": true
+  }],
+  "queues": {
+    "producers": [{ "binding": "INTEGRATION_QUEUE", "queue": "pluck-test-integration" }],
+    "consumers": [
+      { "queue": "pluck-test-integration", "max_batch_size": 1, "max_retries": 3 },
+      { "queue": "pluck-test-artifacts-events", "max_batch_size": 10, "max_retries": 3 }
+    ]
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "pluck-test",
+    "database_id": "REPLACE_WITH_TEST_D1_DATABASE_ID",
+    "migrations_dir": "migrations"
+  }],
+  "vars": {
+    "MAINLINE_REPO": "pluck-test-mainline",
+    "ARTIFACTS_NAMESPACE": "pluck-test",
+    "EVENTS_QUEUE_ID": "REPLACE_WITH_TEST_EVENTS_QUEUE_ID"
+  }
+}

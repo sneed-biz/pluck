@@ -10,7 +10,7 @@ describe("integrateChange", () => {
         mainlineCommit: "mainline-sha",
         event: {
           type: "cf.artifacts.repo.pushed",
-          source: { namespace: "pluck", repoName: "task-1" },
+          source: { type: "artifacts.repo", namespace: "pluck", repoName: "task-1" },
           payload: { ref: "refs/heads/main", before: "parent-sha", after: "source-sha" },
         },
       },

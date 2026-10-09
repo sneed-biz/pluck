@@ -8,7 +8,7 @@ describe("Cloudflare integration contracts", () => {
   it("accepts and normalizes an Artifacts push event", () => {
     const event = {
       type: "cf.artifacts.repo.pushed",
-      source: { namespace: "pluck", repoName: "task-1" },
+      source: { type: "artifacts.repo", namespace: "pluck", repoName: "task-1" },
       payload: { ref: "refs/heads/main", before: "parent", after: "source" },
     } as const;
 
@@ -32,7 +32,7 @@ describe("Cloudflare integration contracts", () => {
   it("rejects mainline pushes to prevent an integration self-trigger loop", () => {
     const event = {
       type: "cf.artifacts.repo.pushed",
-      source: { namespace: "pluck", repoName: "mainline" },
+      source: { type: "artifacts.repo", namespace: "pluck", repoName: "mainline" },
       payload: { ref: "refs/heads/main", before: "parent", after: "source" },
     } as const;
 

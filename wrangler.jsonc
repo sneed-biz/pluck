@@ -11,7 +11,10 @@
   }],
   "queues": {
     "producers": [{ "binding": "INTEGRATION_QUEUE", "queue": "pluck-integration" }],
-    "consumers": [{ "queue": "pluck-integration", "max_batch_size": 1, "max_retries": 3 }]
+    "consumers": [
+      { "queue": "pluck-integration", "max_batch_size": 1, "max_retries": 3 },
+      { "queue": "pluck-artifacts-events", "max_batch_size": 10, "max_retries": 3 }
+    ]
   },
   "d1_databases": [{
     "binding": "DB",
@@ -20,6 +23,9 @@
     "migrations_dir": "migrations"
   }],
   "vars": {
-    "MAINLINE_REPO": "mainline"
+    "MAINLINE_REPO": "mainline",
+    "ARTIFACTS_NAMESPACE": "pluck",
+    "ALLOW_PRODUCTION_MAINLINE": "true",
+    "EVENTS_QUEUE_ID": "REPLACE_WITH_EVENTS_QUEUE_ID"
   }
 }

@@ -5,21 +5,33 @@ import { writeArtifactsCommit, type CommitTrailers } from "./git-write-adapter.j
 import { jobFromPushEvent, type IntegrationJob } from "./queue.js";
 import { D1JobStore } from "./state.js";
 import { retryArtifactRead } from "./retry.js";
+import { createWorkspaceSubscription, deleteWorkspaceSubscription } from "./subscriptions.js";
 
 export type Env = {
   ARTIFACTS: ArtifactsBinding;
   INTEGRATION_QUEUE: Queue<IntegrationJob>;
   DB: D1Database;
   MAINLINE_REPO: string;
+  ARTIFACTS_NAMESPACE?: string;
   ALLOW_PRODUCTION_MAINLINE?: string;
   BOOTSTRAP_TOKEN: string;
   MAX_STALE_RETRIES?: string;
+  PLUCK_API_TOKEN?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  EVENTS_QUEUE_ID?: string;
 };
 
 const DEFAULT_STALE_RETRIES = 3;
 
 export default {
   async fetch(request, env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/api/")) {
+      return handleControlApi(request, env, url);
+    }
+
     if (request.method === "POST" && new URL(request.url).pathname === "/admin/repos") {
       if (request.headers.get("Authorization") !== `Bearer ${env.BOOTSTRAP_TOKEN}`) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
@@ -30,29 +42,26 @@ export default {
       return Response.json({ name: created.name, remote: created.remote, token: created.token });
     }
 
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/events/artifacts") {
-      return Response.json({ error: "not_found" }, { status: 404 });
+    if (request.method === "POST" && new URL(request.url).pathname === "/admin/workspaces") {
+      return provisionWorkspace(request, env);
+    }
+    if (request.method === "DELETE" && new URL(request.url).pathname.startsWith("/admin/workspaces/")) {
+      return deleteWorkspace(request, env, new URL(request.url));
     }
 
-    const body: unknown = await request.json().catch(() => null);
-    if (
-      !isArtifactsPushEvent(body) ||
-      !isWorkspacePushEvent(body, env.MAINLINE_REPO) ||
-      !isSafeIntegrationTarget(env)
-    ) {
-      return Response.json({ error: "invalid_artifacts_push_event" }, { status: 400 });
-    }
-
-    const job = jobFromPushEvent(body);
-    const inserted = await new D1JobStore(env.DB).enqueue(job);
-    if (inserted) await env.INTEGRATION_QUEUE.send(job, { contentType: "json" });
-    return Response.json({ accepted: true, duplicate: !inserted, jobId: job.id }, { status: 202 });
+    return Response.json({ error: "not_found" }, { status: 404 });
   },
 
   async queue(batch, env): Promise<void> {
     const store = new D1JobStore(env.DB);
     for (const message of batch.messages) {
-      const job = message.body;
+      if (isArtifactsPushEvent(message.body)) {
+        await normalizeArtifactsEvent(message.body, env, store);
+        message.ack();
+        continue;
+      }
+
+      const job = message.body as IntegrationJob;
       if (!await store.claim(job)) {
         message.ack();
         continue;
@@ -69,7 +78,82 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<Env, IntegrationJob>;
+} satisfies ExportedHandler<Env, IntegrationJob | ArtifactsPushEvent>;
+
+async function normalizeArtifactsEvent(event: ArtifactsPushEvent, env: Env, store: D1JobStore): Promise<void> {
+  const workspace = await store.getWorkspace(event.source.namespace, event.source.repoName);
+  if (!workspace?.active || !isWorkspacePushEvent(event, env.MAINLINE_REPO) || !isSafeIntegrationTarget(env)) return;
+  const job = jobFromPushEvent(event, event.metadata?.eventTimestamp ?? new Date().toISOString());
+  if (await store.enqueue(job)) await env.INTEGRATION_QUEUE.send(job, { contentType: "json" });
+}
+
+async function provisionWorkspace(request: Request, env: Env): Promise<Response> {
+  if (request.headers.get("Authorization") !== `Bearer ${env.BOOTSTRAP_TOKEN}`) return Response.json({ error: "unauthorized" }, { status: 401 });
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID || !env.EVENTS_QUEUE_ID) {
+    return Response.json({ error: "subscription_configuration_missing" }, { status: 503 });
+  }
+  const body = await request.json().catch(() => ({})) as { namespace?: unknown; repoName?: unknown; ownerId?: unknown };
+  if (typeof body.namespace !== "string" || typeof body.repoName !== "string" || typeof body.ownerId !== "string") {
+    return Response.json({ error: "invalid_workspace" }, { status: 400 });
+  }
+  if (env.ARTIFACTS_NAMESPACE && body.namespace !== env.ARTIFACTS_NAMESPACE) {
+    return Response.json({ error: "invalid_workspace_namespace" }, { status: 400 });
+  }
+  const repo = await env.ARTIFACTS.create(body.repoName, { setDefaultBranch: "main" });
+  const subscriptionId = await createWorkspaceSubscription({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    apiToken: env.CLOUDFLARE_API_TOKEN,
+    queueId: env.EVENTS_QUEUE_ID,
+    namespace: body.namespace,
+    repoName: body.repoName,
+  });
+  await new D1JobStore(env.DB).saveWorkspace({ namespace: body.namespace, repoName: body.repoName, ownerId: body.ownerId, subscriptionId, active: true });
+  return Response.json({ namespace: body.namespace, repoName: body.repoName, subscriptionId, remote: repo.remote, token: repo.token }, { status: 201 });
+}
+
+async function deleteWorkspace(request: Request, env: Env, url: URL): Promise<Response> {
+  if (request.headers.get("Authorization") !== `Bearer ${env.BOOTSTRAP_TOKEN}`) return Response.json({ error: "unauthorized" }, { status: 401 });
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) return Response.json({ error: "subscription_configuration_missing" }, { status: 503 });
+  const [namespace, repoName] = url.pathname.split("/").slice(-2).map(decodeURIComponent);
+  const store = new D1JobStore(env.DB);
+  const workspace = await store.deactivateWorkspace(namespace, repoName);
+  if (!workspace) return Response.json({ error: "not_found" }, { status: 404 });
+  await deleteWorkspaceSubscription({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN, queueId: env.EVENTS_QUEUE_ID ?? "" }, workspace.subscriptionId);
+  return Response.json({ deleted: true, namespace, repoName });
+}
+
+async function handleControlApi(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!env.PLUCK_API_TOKEN || request.headers.get("Authorization") !== `Bearer ${env.PLUCK_API_TOKEN}`) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const store = new D1JobStore(env.DB);
+  if (request.method === "GET" && url.pathname === "/api/jobs") {
+    const rawLimit = Number(url.searchParams.get("limit") ?? "25");
+    const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 25;
+    return Response.json({ jobs: await store.list(limit) });
+  }
+
+  const match = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
+  if (request.method === "GET" && match) {
+    const job = await store.get(decodeURIComponent(match[1]));
+    return job ? Response.json({ job }) : Response.json({ error: "not_found" }, { status: 404 });
+  }
+
+  const retryMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/retry$/);
+  if (request.method === "POST" && retryMatch) {
+    const jobId = decodeURIComponent(retryMatch[1]);
+    const job = await store.get(jobId);
+    if (!job) return Response.json({ error: "not_found" }, { status: 404 });
+    if (!(await store.requeue(jobId))) {
+      return Response.json({ error: "job_not_retryable", status: job.status }, { status: 409 });
+    }
+    await env.INTEGRATION_QUEUE.send(job, { contentType: "json" });
+    return Response.json({ accepted: true, jobId }, { status: 202 });
+  }
+
+  return Response.json({ error: "not_found" }, { status: 404 });
+}
 
 export function isWorkspacePushEvent(event: ArtifactsPushEvent, mainlineRepo: string): boolean {
   return event.payload.ref === "refs/heads/main" && event.source.repoName !== mainlineRepo;

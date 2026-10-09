@@ -18,8 +18,9 @@ export class ArtifactSnapshotError extends Error {
 
 export type ArtifactsPushEvent = {
   type: "cf.artifacts.repo.pushed";
-  source: { namespace: string; repoName: string };
+  source: { type: "artifacts.repo"; namespace: string; repoName: string };
   payload: { ref: string; before: string; after: string };
+  metadata?: { accountId?: string; eventSubscriptionId?: string; eventSchemaVersion?: number; eventTimestamp?: string };
 };
 
 export function isArtifactsPushEvent(value: unknown): value is ArtifactsPushEvent {
@@ -27,6 +28,7 @@ export function isArtifactsPushEvent(value: unknown): value is ArtifactsPushEven
   const event = value as Partial<ArtifactsPushEvent>;
   return (
     event.type === "cf.artifacts.repo.pushed" &&
+    event.source?.type === "artifacts.repo" &&
     typeof event.source?.namespace === "string" &&
     typeof event.source?.repoName === "string" &&
     typeof event.payload?.ref === "string" &&

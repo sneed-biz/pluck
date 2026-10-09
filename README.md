@@ -45,12 +45,14 @@ The Worker exposes an authenticated read/recovery API for MCP and human clients:
 - `GET /api/jobs/:id` returns status, attempts, commit details, and conflict detail.
 - `POST /api/jobs/:id/retry` requeues a terminal conflict or blocked job without bypassing validation.
 
-Workspace lifecycle callers use the bootstrap-protected endpoints to manage native subscriptions:
+Workspace lifecycle callers use owner-authenticated endpoints to manage native subscriptions:
 
 - `POST /admin/workspaces` creates an Artifacts repository, creates its repository-scoped Queue subscription, and persists the subscription ID in D1.
 - `DELETE /admin/workspaces/:namespace/:repo` deletes the Cloudflare subscription and deactivates the workspace.
 
 Set the `PLUCK_API_TOKEN` Worker secret to enable the API. The CLI is a thin client over these routes:
+
+Workspace lifecycle requests use an owner bearer token. Configure `WORKSPACE_OWNER_TOKENS` as a Worker secret JSON object mapping tokens to stable owner IDs; `ownerId` is derived server-side and is not accepted from request bodies. The bootstrap token remains reserved for `/admin/repos`.
 
 ```sh
 PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck -- jobs

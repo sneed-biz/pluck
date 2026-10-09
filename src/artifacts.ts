@@ -1,7 +1,7 @@
 import { retryArtifactRead } from "./retry.js";
 
 export type ArtifactRepo = Pick<ArtifactsRepo, "readBlob" | "readCommit" | "readTree"> & Partial<Pick<ArtifactsRepo, "log">>;
-export type ArtifactsBinding = Pick<Artifacts, "create" | "get">;
+export type ArtifactsBinding = Pick<Artifacts, "create" | "get" | "delete">;
 
 export type ArtifactFile = {
   path: string;

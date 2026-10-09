@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isArtifactsPushEvent, readTextSnapshot } from "../src/artifacts.js";
 import { jobFromPushEvent } from "../src/queue.js";
-import { isSafeIntegrationTarget, isWorkspacePushEvent, snapshotPatch } from "../src/worker.js";
+import { authenticateWorkspaceOwner, isSafeIntegrationTarget, isWorkspacePushEvent, snapshotPatch } from "../src/worker.js";
 import { applyTextPatch } from "../src/integrator.js";
 
 describe("Cloudflare integration contracts", () => {
@@ -44,6 +44,13 @@ describe("Cloudflare integration contracts", () => {
     expect(isSafeIntegrationTarget({ MAINLINE_REPO: "mainline" })).toBe(false);
     expect(isSafeIntegrationTarget({ MAINLINE_REPO: "mainline", ALLOW_PRODUCTION_MAINLINE: "true" })).toBe(true);
     expect(isSafeIntegrationTarget({ MAINLINE_REPO: "isolated-mainline" })).toBe(true);
+  });
+
+  it("derives workspace ownership from a server-side token map", () => {
+    const env = { WORKSPACE_OWNER_TOKENS: JSON.stringify({ "owner-token": "owner-1" }) };
+    expect(authenticateWorkspaceOwner(new Request("https://pluck.test", { headers: { Authorization: "Bearer owner-token" } }), env)).toBe("owner-1");
+    expect(authenticateWorkspaceOwner(new Request("https://pluck.test", { headers: { Authorization: "Bearer forged-owner" } }), env)).toBeNull();
+    expect(authenticateWorkspaceOwner(new Request("https://pluck.test"), env)).toBeNull();
   });
 
   it("walks a Cloudflare Artifacts commit tree into a text snapshot", async () => {

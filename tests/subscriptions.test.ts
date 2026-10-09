@@ -20,7 +20,7 @@ describe("Cloudflare Queue subscriptions", () => {
         body: JSON.stringify({
           name: "pluck-pluck-test-task-1",
           enabled: true,
-          events: ["cf.artifacts.repo.pushed"],
+          events: ["pushed"],
           source: { type: "artifacts.repo", namespace: "pluck-test", repo_name: "task-1" },
           destination: { type: "queues.queue", queue_id: "queue-1" },
         }),

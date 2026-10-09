@@ -19,7 +19,7 @@ export async function createWorkspaceSubscription(config: WorkspaceSubscription)
     body: JSON.stringify({
       name: config.name ?? `pluck-${config.namespace}-${config.repoName}`,
       enabled: true,
-      events: ["cf.artifacts.repo.pushed"],
+      events: ["pushed"],
       source: { type: "artifacts.repo", namespace: config.namespace, repo_name: config.repoName },
       destination: { type: "queues.queue", queue_id: config.queueId },
     }),

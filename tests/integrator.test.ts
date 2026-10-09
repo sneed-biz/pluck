@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyTextPatch, integrateChange } from "../src/integrator.js";
+import { snapshotPatch } from "../src/worker.js";
 
 describe("integrateChange", () => {
   it("fails closed with actionable conflict state when patch application is unproven", () => {
@@ -29,6 +30,67 @@ describe("integrateChange", () => {
 });
 
 describe("applyTextPatch", () => {
+  it("applies multiple distant hunks in a realistic TypeScript file", () => {
+    const before = [
+      "import { readFile } from 'node:fs/promises';",
+      "",
+      "export async function loadConfig(path: string) {",
+      "  const source = await readFile(path, 'utf8');",
+      "  return JSON.parse(source);",
+      "}",
+      "",
+      "export function isEnabled(config: { enabled?: boolean }) {",
+      "  return config.enabled === true;",
+      "}",
+      "",
+      "export function describe(config: { name: string }) {",
+      "  return `config: ${config.name}`;",
+      "}",
+      "",
+    ].join("\n");
+    const after = before
+      .replace("  return JSON.parse(source);", "  return JSON.parse(source) as Record<string, unknown>;")
+      .replace("  return config.enabled === true;", "  return config.enabled !== false;");
+    const result = applyTextPatch(
+      snapshotPatch([{ path: "src/config.ts", blob: "before", content: before }], [{ path: "src/config.ts", blob: "after", content: after }]),
+      [{ path: "src/config.ts", content: before }],
+    );
+
+    expect(result).toEqual({ status: "applied", files: [{ path: "src/config.ts", content: after }] });
+  });
+
+  it("rejects an overlapping hunk without applying other hunks from the same file", () => {
+    const before = [
+      "export function buildRequest(input: { id: string; token: string }) {",
+      "  const headers = { Authorization: `Bearer ${input.token}` };",
+      "  const body = JSON.stringify({ id: input.id });",
+      "  return { headers, body };",
+      "}",
+      "",
+      "export function logRequest(request: { body: string }) {",
+      "  return `request=${request.body}`;",
+      "}",
+      "",
+      "export function retryCount(attempt: number) {",
+      "  return Math.min(attempt, 3);",
+      "}",
+      "",
+    ].join("\n");
+    const agent = before
+      .replace("  const body = JSON.stringify({ id: input.id });", "  const body = JSON.stringify({ requestId: input.id });")
+      .replace("  return Math.min(attempt, 3);", "  return Math.min(attempt, 5);");
+    const conflictingMainline = before.replace(
+      "  const body = JSON.stringify({ id: input.id });",
+      "  const body = JSON.stringify({ id: input.id, source: 'mainline' });",
+    );
+    const result = applyTextPatch(
+      snapshotPatch([{ path: "src/request.ts", blob: "before", content: before }], [{ path: "src/request.ts", blob: "agent", content: agent }]),
+      [{ path: "src/request.ts", content: conflictingMainline }],
+    );
+
+    expect(result).toEqual({ status: "conflict", conflicts: [{ path: "src/request.ts", reason: "hunk-mismatch" }] });
+  });
+
   it("applies a strict multi-file patch without a filesystem", () => {
     const result = applyTextPatch(
       [

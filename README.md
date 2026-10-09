@@ -17,11 +17,11 @@ npm run dev
 
 The probe reports whether the installed `isomorphic-git` version exposes a patch API. The integrator intentionally fails closed when patch application is not proven. That is a deadline gate: Pluck must not push a partially applied tree.
 
-## Open risks
+## Operational notes
 
 - Live integration tests must use a separate Worker deployment, Artifacts namespace/repository, D1 database, and Queue. A deployment targeting the repository name `mainline` is rejected unless `ALLOW_PRODUCTION_MAINLINE=true` is explicitly configured.
-- Artifacts binding and event payloads need to be verified against a real Workers Paid account.
-- `isomorphic-git` must provide, or be paired with, a tested unified-diff application implementation compatible with Workers. Its public API alone is not assumed to provide a complete cherry-pick operation.
+- Artifacts event delivery is native Cloudflare Queue delivery; the Worker does not expose a public webhook or shared webhook secret.
+- `isomorphic-git` with the Workers web HTTP adapter and an in-memory filesystem provides the Git write path. The adapter is paired with the tested unified-diff application implementation in this repository.
 - The write adapter must push with `force: false` (never force-push). The D1 lease plus a single queue consumer serializes normal work; if the remote rejects the push as non-fast-forward, that rejection is the compare-and-swap signal. Re-read mainline, re-apply the patch, and retry.
 
 ## Intended integration flow
@@ -45,12 +45,12 @@ The Worker exposes an authenticated read/recovery API for MCP and human clients:
 - `GET /api/jobs/:id` returns status, attempts, commit details, and conflict detail.
 - `POST /api/jobs/:id/retry` requeues a terminal conflict or blocked job without bypassing validation.
 
-Workspace lifecycle callers use owner-authenticated endpoints to manage native subscriptions:
+Workspace lifecycle callers use owner-authenticated endpoints to manage native subscriptions. Provisioning creates the repository first, then the subscription and D1 record; failures clean up resources created during the attempt.
 
 - `POST /admin/workspaces` creates an Artifacts repository, creates its repository-scoped Queue subscription, and persists the subscription ID in D1.
 - `DELETE /admin/workspaces/:namespace/:repo` deletes the Cloudflare subscription and deactivates the workspace.
 
-Set the `PLUCK_API_TOKEN` Worker secret to enable the API. The CLI is a thin client over these routes:
+Set the `PLUCK_API_TOKEN` Worker secret to enable the jobs API. Set `BOOTSTRAP_TOKEN` for `/admin/repos`, and configure `WORKSPACE_OWNER_TOKENS` for workspace lifecycle requests. The CLI is a thin client over the jobs routes:
 
 Workspace lifecycle requests use an owner bearer token. Configure `WORKSPACE_OWNER_TOKENS` as a Worker secret JSON object mapping tokens to stable owner IDs; `ownerId` is derived server-side and is not accepted from request bodies. The bootstrap token remains reserved for `/admin/repos`.
 
@@ -64,9 +64,9 @@ The API is intentionally read-first. It cannot create commits, force-push mainli
 
 ## Isolated test app
 
-Use `wrangler.test.jsonc` for live integration testing. It targets the separate `pluck-mcp-test` Worker, `pluck-test` Artifacts namespace, `pluck-test-mainline` repository, `pluck-test` D1 database, `pluck-test-integration` Queue, and `pluck-test-artifacts-events` Queue. Create the repository-level subscription with Cloudflare's Queue subscription API before pushing a workspace commit. Never point this config at the production `mainline` repository or production bindings.
+Use `wrangler.test.jsonc` for live integration testing. It targets the separate `pluck-mcp-test` Worker, `pluck-test` Artifacts namespace, `pluck-test-mainline` repository, `pluck-test` D1 database, `pluck-test-integration` Queue, and `pluck-test-artifacts-events` Queue. Provision workspace repositories and their repository-scoped subscriptions through `POST /admin/workspaces`; do not create the subscription manually. Never point this config at the production `mainline` repository or production bindings.
 
-After replacing the D1 placeholder with the provisioned test database ID:
+After the test resources exist and the D1 ID and event queue ID are configured:
 
 ```sh
 npm run db:migrate:test

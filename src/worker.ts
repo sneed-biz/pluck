@@ -1,4 +1,4 @@
-import { createTwoFilesPatch, formatPatch, structuredPatch } from "diff";
+import { createTwoFilesPatch, formatPatch, parsePatch, structuredPatch } from "diff";
 import { isArtifactsPushEvent, readTextSnapshot, type ArtifactFile, type ArtifactsBinding, type ArtifactsPushEvent } from "./artifacts.js";
 import { applyTextPatch } from "./integrator.js";
 import { writeArtifactsCommit, type CommitTrailers } from "./git-write-adapter.js";
@@ -162,6 +162,30 @@ async function handleControlApi(request: Request, env: Env, url: URL): Promise<R
     return Response.json({ jobs: await store.list(limit) });
   }
 
+  if (request.method === "GET" && url.pathname === "/api/queue") {
+    return Response.json({ queue: await store.queueStats() });
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/jobs") {
+    const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+    if (typeof body.namespace !== "string" || typeof body.repoName !== "string" || typeof body.before !== "string" || typeof body.after !== "string" || body.ref !== "refs/heads/main") {
+      return Response.json({ error: "invalid_job" }, { status: 400 });
+    }
+    const event = {
+      type: "cf.artifacts.repo.pushed" as const,
+      source: { type: "artifacts.repo" as const, namespace: body.namespace, repoName: body.repoName },
+      payload: { ref: body.ref, before: body.before, after: body.after },
+    };
+    const workspace = await store.getWorkspace(body.namespace, body.repoName);
+    if (!workspace?.active || !isWorkspacePushEvent(event, env.MAINLINE_REPO) || !isSafeIntegrationTarget(env)) {
+      return Response.json({ error: "invalid_workspace" }, { status: 400 });
+    }
+    const job = jobFromPushEvent(event);
+    const accepted = await store.enqueue(job);
+    if (accepted) await env.INTEGRATION_QUEUE.send(job, { contentType: "json" });
+    return Response.json({ accepted, jobId: job.id }, { status: accepted ? 202 : 200 });
+  }
+
   const match = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
   if (request.method === "GET" && match) {
     const job = await store.get(decodeURIComponent(match[1]));
@@ -180,7 +204,27 @@ async function handleControlApi(request: Request, env: Env, url: URL): Promise<R
     return Response.json({ accepted: true, jobId }, { status: 202 });
   }
 
+  const resolveMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/resolve$/);
+  if (request.method === "POST" && resolveMatch) {
+    const jobId = decodeURIComponent(resolveMatch[1]);
+    const job = await store.get(jobId);
+    if (!job) return Response.json({ error: "not_found" }, { status: 404 });
+    const body = await request.json().catch(() => ({})) as { patch?: unknown };
+    if (typeof body.patch !== "string" || !isValidPatch(body.patch)) return Response.json({ error: "invalid_patch" }, { status: 400 });
+    if (!(await store.resolve(jobId, body.patch))) return Response.json({ error: "job_not_resolvable", status: job.status }, { status: 409 });
+    await env.INTEGRATION_QUEUE.send({ ...job, resolutionPatch: body.patch }, { contentType: "json" });
+    return Response.json({ accepted: true, jobId }, { status: 202 });
+  }
+
   return Response.json({ error: "not_found" }, { status: 404 });
+}
+
+export function isValidPatch(patch: string): boolean {
+  try {
+    return patch.trim().length > 0 && /(^|\n)@@\s/.test(patch) && parsePatch(patch).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function isWorkspacePushEvent(event: ArtifactsPushEvent, mainlineRepo: string): boolean {
@@ -218,7 +262,7 @@ async function integrateJob(job: IntegrationJob, env: Env, recordAttempt: () => 
 
   const sourceFiles = await readTextSnapshot(source, job.sourceCommit);
   const parentFiles = await readTextSnapshot(source, job.beforeCommit);
-  const patch = snapshotPatch(parentFiles, sourceFiles);
+  const patch = job.resolutionPatch ?? snapshotPatch(parentFiles, sourceFiles);
   const trailers: CommitTrailers = {
     task: job.id,
     workspace: job.sourceNamespace,

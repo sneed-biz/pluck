@@ -16,6 +16,8 @@ export type JobRecord = IntegrationJob & {
   attemptCount: number;
 };
 
+export type QueueStats = Record<JobStatus, number>;
+
 export type JobStore = {
   enqueue(job: IntegrationJob): Promise<boolean>;
   claim(job: IntegrationJob): Promise<boolean>;
@@ -24,6 +26,8 @@ export type JobStore = {
   get(jobId: string): Promise<JobRecord | null>;
   list(limit: number): Promise<JobRecord[]>;
   requeue(jobId: string): Promise<boolean>;
+  resolve(jobId: string, patch: string): Promise<boolean>;
+  queueStats(): Promise<QueueStats>;
   getWorkspace(namespace: string, repoName: string): Promise<Workspace | null>;
   saveWorkspace(workspace: Workspace): Promise<void>;
   deactivateWorkspace(namespace: string, repoName: string): Promise<Workspace | null>;
@@ -36,11 +40,11 @@ export class D1JobStore implements JobStore {
     const result = await this.db
       .prepare(
         `INSERT INTO integration_jobs
-          (id, source_namespace, source_repo, source_commit, before_commit, ref, received_at, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')
+           (id, source_namespace, source_repo, source_commit, before_commit, ref, received_at, status, resolution_patch)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
          ON CONFLICT(id) DO NOTHING`,
       )
-      .bind(job.id, job.sourceNamespace, job.sourceRepo, job.sourceCommit, job.beforeCommit, job.ref, job.receivedAt)
+      .bind(job.id, job.sourceNamespace, job.sourceRepo, job.sourceCommit, job.beforeCommit, job.ref, job.receivedAt, job.resolutionPatch ?? null)
       .run();
     return result.meta.changes === 1;
   }
@@ -72,7 +76,7 @@ export class D1JobStore implements JobStore {
   async get(jobId: string): Promise<JobRecord | null> {
     const row = await this.db.prepare(
       `SELECT id, source_namespace, source_repo, source_commit, before_commit, ref,
-              received_at, status, detail, attempt_count
+              received_at, status, detail, attempt_count, resolution_patch
        FROM integration_jobs WHERE id = ?`,
     ).bind(jobId).first<JobRow>();
     return row ? toJobRecord(row) : null;
@@ -81,7 +85,7 @@ export class D1JobStore implements JobStore {
   async list(limit: number): Promise<JobRecord[]> {
     const result = await this.db.prepare(
       `SELECT id, source_namespace, source_repo, source_commit, before_commit, ref,
-              received_at, status, detail, attempt_count
+              received_at, status, detail, attempt_count, resolution_patch
        FROM integration_jobs ORDER BY created_at DESC LIMIT ?`,
     ).bind(limit).all<JobRow>();
     return result.results.map(toJobRecord);
@@ -93,6 +97,21 @@ export class D1JobStore implements JobStore {
        WHERE id = ? AND status IN ('conflict', 'blocked')`,
     ).bind(jobId).run();
     return result.meta.changes === 1;
+  }
+
+  async resolve(jobId: string, patch: string): Promise<boolean> {
+    const result = await this.db.prepare(
+      `UPDATE integration_jobs SET status = 'queued', detail = NULL, resolution_patch = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status IN ('conflict', 'blocked')`,
+    ).bind(patch, jobId).run();
+    return result.meta.changes === 1;
+  }
+
+  async queueStats(): Promise<QueueStats> {
+    const result = await this.db.prepare("SELECT status, COUNT(*) AS count FROM integration_jobs GROUP BY status").all<{ status: JobStatus; count: number }>();
+    const stats: QueueStats = { queued: 0, processing: 0, blocked: 0, conflict: 0, integrated: 0 };
+    for (const row of result.results) stats[row.status] = row.count;
+    return stats;
   }
 
   async getWorkspace(namespace: string, repoName: string): Promise<Workspace | null> {
@@ -132,6 +151,7 @@ type JobRow = {
   status: JobStatus;
   detail: string | null;
   attempt_count: number;
+  resolution_patch: string | null;
 };
 
 type WorkspaceRow = {
@@ -154,6 +174,7 @@ function toJobRecord(row: JobRow): JobRecord {
     status: row.status,
     detail: row.detail,
     attemptCount: row.attempt_count,
+    resolutionPatch: row.resolution_patch ?? undefined,
   };
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isArtifactsPushEvent, readTextSnapshot } from "../src/artifacts.js";
 import { jobFromPushEvent } from "../src/queue.js";
-import { authenticateWorkspaceOwner, isSafeIntegrationTarget, isWorkspacePushEvent, snapshotPatch } from "../src/worker.js";
+import { authenticateWorkspaceOwner, isSafeIntegrationTarget, isValidPatch, isWorkspacePushEvent, snapshotPatch } from "../src/worker.js";
 import { applyTextPatch } from "../src/integrator.js";
 
 describe("Cloudflare integration contracts", () => {
@@ -51,6 +51,12 @@ describe("Cloudflare integration contracts", () => {
     expect(authenticateWorkspaceOwner(new Request("https://pluck.test", { headers: { Authorization: "Bearer owner-token" } }), env)).toBe("owner-1");
     expect(authenticateWorkspaceOwner(new Request("https://pluck.test", { headers: { Authorization: "Bearer forged-owner" } }), env)).toBeNull();
     expect(authenticateWorkspaceOwner(new Request("https://pluck.test"), env)).toBeNull();
+  });
+
+  it("accepts unified resolution patches and rejects arbitrary text", () => {
+    expect(isValidPatch("@@ -1 +1 @@\n-old\n+new\n")).toBe(true);
+    expect(isValidPatch("not a patch")).toBe(false);
+    expect(isValidPatch(" ")).toBe(false);
   });
 
   it("walks a Cloudflare Artifacts commit tree into a text snapshot", async () => {

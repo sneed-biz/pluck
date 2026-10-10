@@ -42,8 +42,11 @@ Workspace agents continue to use normal Git commits and pushes. The Artifacts pu
 The Worker exposes an authenticated read/recovery API for MCP and human clients:
 
 - `GET /api/jobs?limit=25` lists recent integration jobs.
+- `GET /api/queue` returns D1-backed counts by job status.
 - `GET /api/jobs/:id` returns status, attempts, commit details, and conflict detail.
+- `POST /api/jobs` submits a registered workspace commit event idempotently.
 - `POST /api/jobs/:id/retry` requeues a terminal conflict or blocked job without bypassing validation.
+- `POST /api/jobs/:id/resolve` accepts a unified resolution patch and requeues the job; normal source-parent, context, patch, and CAS validation still applies.
 
 Workspace lifecycle callers use owner-authenticated endpoints to manage native subscriptions. Provisioning creates the repository first, then the subscription and D1 record; failures clean up resources created during the attempt.
 

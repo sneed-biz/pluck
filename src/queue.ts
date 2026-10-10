@@ -8,6 +8,7 @@ export type IntegrationJob = {
   beforeCommit: string;
   ref: string;
   receivedAt: string;
+  resolutionPatch?: string;
 };
 
 export function jobFromPushEvent(event: ArtifactsPushEvent, receivedAt = new Date().toISOString()): IntegrationJob {

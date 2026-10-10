@@ -52,7 +52,7 @@ Workspace lifecycle callers use owner-authenticated endpoints to manage native s
 
 Set the `PLUCK_API_TOKEN` Worker secret to enable the jobs API. Set `BOOTSTRAP_TOKEN` for `/admin/repos`, and configure `WORKSPACE_OWNER_TOKENS` for workspace lifecycle requests. The CLI is a thin client over the jobs routes:
 
-Workspace lifecycle requests use an owner bearer token. Configure `WORKSPACE_OWNER_TOKENS` as a Worker secret JSON object mapping tokens to stable owner IDs; `ownerId` is derived server-side and is not accepted from request bodies. The bootstrap token remains reserved for `/admin/repos`.
+Workspace lifecycle requests use an owner bearer token. Configure `WORKSPACE_OWNER_TOKENS` as a Worker secret JSON object mapping tokens to stable owner IDs; `ownerId` is derived server-side and is not accepted from request bodies. The bootstrap token remains reserved for `/admin/repos`. Configure `CLOUDFLARE_API_TOKEN` with account-scoped Workers Queues write access for subscription management.
 
 ```sh
 PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck -- jobs

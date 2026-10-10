@@ -2,6 +2,9 @@
   "name": "pluck",
   "private": true,
   "type": "module",
+  "bin": {
+    "pluck": "scripts/pluck.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

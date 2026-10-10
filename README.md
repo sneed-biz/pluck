@@ -4,10 +4,36 @@ Pluck is an MCP-native coordination layer for Cloudflare Artifacts. This reposit
 
 Pluck is inspired by Cloudflare's [Artifacts Git platform](https://blog.cloudflare.com/next-git-platform-on-cloudflare/). The implementation in this repository is independently authored and is licensed under the MIT License.
 
-## Run the spike
+## Quickstart
+
+Pluck coordinates concurrent agent changes in isolated Cloudflare Artifacts repositories and integrates valid commits into a shared mainline repository. It is built for Cloudflare's [next Git platform competition](https://blog.cloudflare.com/next-git-platform-on-cloudflare/).
+
+You need a Cloudflare Workers Paid plan with Artifacts access, Node.js, Git, and either an authenticated Wrangler session (`npx wrangler login`) or a `CLOUDFLARE_API_TOKEN` with access to your target account.
 
 ```sh
 npm install
+npx wrangler login
+npm run pluck -- init --name my-pluck
+```
+
+`init` creates or reuses a dedicated Artifacts namespace, mainline repository, D1 database, and two Queues; seeds mainline; applies migrations; deploys the Worker; and writes non-secret deployment configuration to `.pluck/my-pluck.wrangler.jsonc`. It prompts for Worker secrets and never writes them to disk. Rerun the command with the same name to reuse resources.
+
+For CI or other unattended setup, supply `--yes --name my-pluck` along with `PLUCK_API_TOKEN`, `BOOTSTRAP_TOKEN`, `PLUCK_OWNER_TOKEN`, and `CLOUDFLARE_API_TOKEN`. Set `CLOUDFLARE_ACCOUNT_ID` when Wrangler cannot infer the intended account.
+
+After setup, use the displayed Worker URL and the workspace-owner token to provision a workspace. Add `.agent/context.md`, make a linear commit on `main`, and push it; its native Artifacts push event starts integration automatically.
+
+```sh
+export PLUCK_URL=https://my-pluck.<account>.workers.dev
+export PLUCK_OWNER_TOKEN='the-owner-token-you-provided-to-init'
+export PLUCK_NAMESPACE=my-pluck
+export PLUCK_MAINLINE_REPO=my-pluck-mainline
+npm run pluck -- create agent-a
+npm run pluck -- create agent-b
+```
+
+## Development checks
+
+```sh
 npm run typecheck
 npm test
 npm run probe
@@ -62,6 +88,27 @@ PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck --
 PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck -- status pluck/task-1:commit
 PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck -- retry pluck/task-1:commit
 ```
+
+Clean agent changes integrate automatically. Review conflicts locally with standard Git tooling rather than constructing a patch by hand:
+
+```sh
+export PLUCK_NAMESPACE=pluck
+export PLUCK_MAINLINE_REPO=pluck-mainline
+npm run pluck -- conflicts
+npm run pluck -- review pluck/task-1:commit
+```
+
+`review` issues short-lived read tokens through the authenticated Wrangler CLI, clones current mainline to a disposable local worktree, and cherry-picks the agent commit. Resolve any normal Git conflict, continue the cherry-pick, then confirm the generated patch. Pluck remains the only process that writes mainline. Use `--keep` to retain a worktree or `--no-editor` to skip launching `$EDITOR`.
+
+Create a workspace repository with the owner credential:
+
+```sh
+export PLUCK_OWNER_TOKEN='your-workspace-owner-token'
+npm run pluck -- create my-new-repo
+npm run pluck -- create my-new-repo pluck
+```
+
+The command returns the provisioned Artifacts `remote` and short-lived Git `token`. Use those values to clone or set a Git remote, add `.agent/context.md`, and push a linear commit to `main`.
 
 The API is intentionally read-first. It cannot create commits, force-push mainline, or bypass source-parent, context, trailer, or patch validation. An MCP server can expose these same operations to agents without creating a competing write path.
 

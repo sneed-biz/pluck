@@ -8,5 +8,6 @@ pnpm-debug.log*
 .env.*
 !.env.example
 .wrangler/
+.pluck/
 iso-test-app/
 *.log

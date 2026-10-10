@@ -1,9 +1,42 @@
+#!/usr/bin/env -S npx tsx
+
+import { runInit } from "./init.js";
+import { listConflicts, reviewJob } from "./review.js";
+
 const baseUrl = process.env.PLUCK_URL;
 const token = process.env.PLUCK_TOKEN;
-const [command, argument, patch] = process.argv.slice(2);
+const ownerToken = process.env.PLUCK_OWNER_TOKEN;
+const [command, argument, patch, ...rest] = process.argv.slice(2);
 
-if (!baseUrl || !token) {
-  usage("PLUCK_URL and PLUCK_TOKEN are required");
+if (command === "init" || command === "setup") {
+  const args = [argument, patch, ...rest].filter((value): value is string => typeof value === "string");
+  const option = (name: string): string | undefined => {
+    const index = args.indexOf(name);
+    return index === -1 ? undefined : args[index + 1];
+  };
+  await runInit({ name: option("--name"), accountId: option("--account-id"), yes: args.includes("--yes") });
+  process.exit();
+}
+
+if (command === "conflicts") {
+  if (!baseUrl || !token) usage("PLUCK_URL and PLUCK_TOKEN are required");
+  await listConflicts(baseUrl, token);
+  process.exit();
+}
+
+if (command === "review") {
+  if (!baseUrl || !token) usage("PLUCK_URL and PLUCK_TOKEN are required");
+  if (!argument) usage("usage: npm run pluck -- review <job-id> [--keep] [--no-editor]");
+  const options = [patch, ...rest];
+  const namespace = process.env.PLUCK_NAMESPACE;
+  const mainline = process.env.PLUCK_MAINLINE_REPO;
+  if (!namespace || !mainline) usage("PLUCK_NAMESPACE and PLUCK_MAINLINE_REPO are required for review");
+  await reviewJob({ baseUrl, token, namespace, mainline, jobId: argument, keep: options.includes("--keep"), noEditor: options.includes("--no-editor") });
+  process.exit();
+}
+
+if (!baseUrl || (!token && command !== "create")) {
+  usage(command === "create" ? "PLUCK_URL is required" : "PLUCK_URL and PLUCK_TOKEN are required");
 }
 
 const routes: Record<string, string> = {
@@ -14,8 +47,21 @@ const routes: Record<string, string> = {
   resolve: argument ? `/api/jobs/${encodeURIComponent(argument)}/resolve` : "",
   queue: "/api/queue",
 };
+if (command === "create") {
+  if (!argument) usage("usage: npm run pluck -- create <repo-name> [namespace]");
+  if (!ownerToken) usage("PLUCK_OWNER_TOKEN is required for create");
+  const response = await fetch(`${baseUrl!.replace(/\/$/, "")}/admin/workspaces`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ namespace: patch ?? process.env.PLUCK_NAMESPACE ?? "pluck", repoName: argument }),
+  });
+  const body = await response.json();
+  console.log(JSON.stringify(body, null, 2));
+  if (!response.ok) process.exitCode = 1;
+  process.exit();
+}
 const path = routes[command ?? ""];
-if (!path) usage("usage: npm run pluck -- jobs | queue | status <job-id> | retry <job-id> | resolve <job-id> <patch>");
+if (!path) usage("usage: npm run pluck -- init [--name <name>] [--account-id <id>] [--yes] | create <repo-name> [namespace] | jobs | conflicts | review <job-id> | queue | status <job-id> | retry <job-id> | resolve <job-id> <patch>");
 
 const response = await fetch(`${baseUrl!.replace(/\/$/, "")}${path}`, {
   method: command === "retry" || command === "resolve" ? "POST" : "GET",

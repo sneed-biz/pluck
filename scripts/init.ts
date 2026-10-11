@@ -96,18 +96,25 @@ function findResource(value: unknown, name: string, idKeys: string[]): string | 
 function ensureDatabase(name: string): string {
   const existing = findResource(wranglerJson(["d1", "list"]), name, ["uuid", "database_id", "id"]);
   if (existing) return existing;
-  const created = wranglerJson(["d1", "create", name]);
-  const item = records(created)[0] ?? (created as Record<string, unknown>);
-  const id = stringValue(item, "uuid", "database_id", "id");
+  wrangler(["d1", "create", name]);
+  const id = findResource(wranglerJson(["d1", "list"]), name, ["uuid", "database_id", "id"]);
   if (!id) throw new Error(`Could not determine D1 database ID for ${name}`);
   return id;
 }
 
+export function queueIdFromList(output: string, name: string): string | undefined {
+  for (const line of output.split("\n")) {
+    const columns = line.split("│").map((column) => column.trim()).filter(Boolean);
+    if (columns[1] === name && /^[0-9a-f]{32}$/i.test(columns[0] ?? "")) return columns[0];
+  }
+  return undefined;
+}
+
 function ensureQueue(name: string): string {
-  const existing = findResource(wranglerJson(["queues", "list"]), name, ["queue_id", "id"]);
+  const existing = queueIdFromList(wrangler(["queues", "list"]), name);
   if (existing) return existing;
   wrangler(["queues", "create", name]);
-  const created = findResource(wranglerJson(["queues", "list"]), name, ["queue_id", "id"]);
+  const created = queueIdFromList(wrangler(["queues", "list"]), name);
   if (!created) throw new Error(`Could not determine Queue ID for ${name}`);
   return created;
 }

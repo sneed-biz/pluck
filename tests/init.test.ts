@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountIdFromWhoami, deploymentNames, renderConfig } from "../scripts/init.js";
+import { accountIdFromWhoami, deploymentNames, queueIdFromList, renderConfig } from "../scripts/init.js";
 
 describe("pluck init", () => {
   it("derives isolated resource names from a deployment name", () => {
@@ -39,5 +39,14 @@ describe("pluck init", () => {
   it("extracts an account ID from Wrangler's text-only whoami output", () => {
     expect(accountIdFromWhoami("Account ID\nabc123def456abc123def456abc123de\n")).toBe("abc123def456abc123def456abc123de");
     expect(accountIdFromWhoami("Not logged in")).toBeUndefined();
+  });
+
+  it("extracts a queue ID from Wrangler's text-only queue listing", () => {
+    const output = [
+      "│ id                               │ name              │",
+      "│ 1234567890abcdef1234567890abcdef │ pluck-events      │",
+    ].join("\n");
+    expect(queueIdFromList(output, "pluck-events")).toBe("1234567890abcdef1234567890abcdef");
+    expect(queueIdFromList(output, "missing")).toBeUndefined();
   });
 });

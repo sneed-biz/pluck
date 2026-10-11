@@ -19,6 +19,10 @@ describe("pluck init", () => {
     expect(() => deploymentNames("pluck-")).toThrow("Deployment names");
   });
 
+  it("uses the same validated resource names for destruction", () => {
+    expect(deploymentNames("demo-1").mainline).toBe("demo-1-mainline");
+  });
+
   it("renders a secret-free generated Wrangler config", () => {
     const config = JSON.parse(renderConfig(deploymentNames("acme-pluck"), "account-1", "database-1", "queue-1"));
     expect(config).toMatchObject({

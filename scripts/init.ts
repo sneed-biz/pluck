@@ -11,6 +11,11 @@ export type InitOptions = {
   yes: boolean;
 };
 
+export type DestroyOptions = {
+  name?: string;
+  confirmation?: string;
+};
+
 export type DeploymentNames = {
   worker: string;
   namespace: string;
@@ -93,13 +98,13 @@ function findResource(value: unknown, name: string, idKeys: string[]): string | 
   return resource ? stringValue(resource, ...idKeys) : undefined;
 }
 
-function ensureDatabase(name: string): string {
+function ensureDatabase(name: string): { id: string; created: boolean } {
   const existing = findResource(wranglerJson(["d1", "list"]), name, ["uuid", "database_id", "id"]);
-  if (existing) return existing;
+  if (existing) return { id: existing, created: false };
   wrangler(["d1", "create", name]);
   const id = findResource(wranglerJson(["d1", "list"]), name, ["uuid", "database_id", "id"]);
   if (!id) throw new Error(`Could not determine D1 database ID for ${name}`);
-  return id;
+  return { id, created: true };
 }
 
 export function queueIdFromList(output: string, name: string): string | undefined {
@@ -110,28 +115,30 @@ export function queueIdFromList(output: string, name: string): string | undefine
   return undefined;
 }
 
-function ensureQueue(name: string): string {
+function ensureQueue(name: string): { id: string; created: boolean } {
   const existing = queueIdFromList(wrangler(["queues", "list"]), name);
-  if (existing) return existing;
+  if (existing) return { id: existing, created: false };
   wrangler(["queues", "create", name]);
   const created = queueIdFromList(wrangler(["queues", "list"]), name);
   if (!created) throw new Error(`Could not determine Queue ID for ${name}`);
-  return created;
+  return { id: created, created: true };
 }
 
-function ensureMainline(names: DeploymentNames): void {
+function ensureMainline(names: DeploymentNames): boolean {
   try {
     wrangler(["artifacts", "repos", "get", names.mainline, "--namespace", names.namespace]);
+    return false;
   } catch {
     wrangler(["artifacts", "repos", "create", names.mainline, "--namespace", names.namespace, "--default-branch", "main"]);
+    return true;
   }
 }
 
-function seedMainline(names: DeploymentNames): void {
+function seedMainline(names: DeploymentNames): boolean {
   const log = wrangler(["artifacts", "repos", "get", names.mainline, "--namespace", names.namespace, "--json"]);
   const repo = JSON.parse(log) as { remote?: string; last_push_at?: string | null; result?: { remote?: string; last_push_at?: string | null } };
   const details = repo.result ?? repo;
-  if (details.last_push_at) return;
+  if (details.last_push_at) return false;
   const tokenResponse = wranglerJson(["artifacts", "repos", "issue-token", names.mainline, "--namespace", names.namespace, "--scope", "write", "--ttl", "900"]);
   const token = stringValue((records(tokenResponse)[0] ?? tokenResponse) as Record<string, unknown>, "plaintext", "token");
   if (!details.remote || !token) throw new Error("Could not issue a temporary token to seed mainline");
@@ -149,6 +156,7 @@ function seedMainline(names: DeploymentNames): void {
     execFileSync("git", ["add", "."], { cwd: root });
     execFileSync("git", ["commit", "-m", "Initialize Pluck mainline"], { cwd: root, stdio: "ignore" });
     execFileSync("git", ["push", remote.toString(), "HEAD:main"], { cwd: root, stdio: "ignore" });
+    return true;
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -211,22 +219,74 @@ export async function runInit(options: InitOptions): Promise<void> {
 
   const configDirectory = path.join(".pluck");
   const config = path.join(configDirectory, `${name}.wrangler.jsonc`);
-  if (existsSync(config)) console.log(`Reusing ${config}`);
+  console.log(`\nInitializing Pluck deployment ${name} in Cloudflare account ${accountId}.`);
+  if (existsSync(config)) console.log(`Reusing generated config: ${config}`);
   await fs.mkdir(configDirectory, { recursive: true });
-  const databaseId = ensureDatabase(names.database);
-  ensureQueue(names.integrationQueue);
-  const eventsQueueId = ensureQueue(names.eventsQueue);
-  ensureMainline(names);
-  seedMainline(names);
-  await fs.writeFile(config, renderConfig(names, accountId, databaseId, eventsQueueId));
+  const database = ensureDatabase(names.database);
+  console.log(`${database.created ? "Created" : "Reused"} D1 database: ${names.database}`);
+  const integrationQueue = ensureQueue(names.integrationQueue);
+  console.log(`${integrationQueue.created ? "Created" : "Reused"} integration Queue: ${names.integrationQueue}`);
+  const eventsQueue = ensureQueue(names.eventsQueue);
+  console.log(`${eventsQueue.created ? "Created" : "Reused"} Artifacts events Queue: ${names.eventsQueue}`);
+  const mainlineCreated = ensureMainline(names);
+  console.log(`${mainlineCreated ? "Created" : "Reused"} Artifacts namespace and mainline repository: ${names.namespace}/${names.mainline}`);
+  console.log(`${seedMainline(names) ? "Seeded" : "Reused"} mainline branch: ${names.mainline}/main`);
+  await fs.writeFile(config, renderConfig(names, accountId, database.id, eventsQueue.id));
+  console.log(`Wrote generated config: ${config}`);
 
+  console.log("Applying D1 migrations...");
   wrangler(["d1", "migrations", "apply", names.database, "--remote", "--config", config]);
+  console.log("Deploying Pluck Worker...");
   wrangler(["deploy", "--config", config]);
+  console.log("Storing Worker secrets...");
   putSecret(config, "PLUCK_API_TOKEN", await requiredSecret("PLUCK_API_TOKEN", "PLUCK_API_TOKEN", options.yes));
   putSecret(config, "BOOTSTRAP_TOKEN", await requiredSecret("BOOTSTRAP_TOKEN", "BOOTSTRAP_TOKEN", options.yes));
   const ownerToken = await requiredSecret("PLUCK_OWNER_TOKEN", "Initial workspace owner token", options.yes);
   const ownerId = process.env.PLUCK_OWNER_ID ?? "owner-1";
   putSecret(config, "WORKSPACE_OWNER_TOKENS", JSON.stringify({ [ownerToken]: ownerId }));
   putSecret(config, "CLOUDFLARE_API_TOKEN", await requiredSecret("CLOUDFLARE_API_TOKEN", "Runtime Cloudflare API token", options.yes));
-  console.log(JSON.stringify({ worker: names.worker, namespace: names.namespace, mainline: names.mainline, config, next: `Set PLUCK_URL, PLUCK_OWNER_TOKEN, and PLUCK_NAMESPACE=${names.namespace}, then run npm run pluck -- create <workspace>.` }, null, 2));
+  console.log(`
+Pluck is ready.
+
+Resources:
+  Worker: ${names.worker}
+  Namespace: ${names.namespace}
+  Mainline repository: ${names.mainline}
+  D1 database: ${names.database}
+  Integration Queue: ${names.integrationQueue}
+  Artifacts events Queue: ${names.eventsQueue}
+  Generated config: ${config}
+
+Next steps:
+  export PLUCK_URL=https://${names.worker}.<account>.workers.dev
+  export PLUCK_OWNER_TOKEN='<the owner token you entered>'
+  export PLUCK_NAMESPACE=${names.namespace}
+  export PLUCK_MAINLINE_REPO=${names.mainline}
+  npm run pluck -- create agent-a
+  npm run pluck -- create agent-b
+
+Set PLUCK_TOKEN to the control API token you entered before running jobs, conflicts, or review commands.`);
+}
+
+export async function runDestroy(options: DestroyOptions): Promise<void> {
+  const name = options.name ?? await prompt("Pluck deployment name to destroy: ");
+  if (!name) throw new Error("Provide --name");
+  const names = deploymentNames(name);
+  const confirmation = options.confirmation ?? await prompt(`This permanently deletes Pluck resources for ${name}. Type ${name} to continue: `);
+  if (confirmation !== name) throw new Error("Destruction cancelled: confirmation did not match the deployment name");
+
+  const config = path.join(".pluck", `${name}.wrangler.jsonc`);
+  console.log(`\nDestroying Pluck deployment ${name}.`);
+  wrangler(["delete", names.worker, "--force"]);
+  console.log(`Deleted Worker: ${names.worker}`);
+  wrangler(["artifacts", "repos", "delete", names.mainline, "--namespace", names.namespace, "--force"]);
+  console.log(`Deleted mainline repository: ${names.namespace}/${names.mainline}`);
+  wrangler(["queues", "delete", names.integrationQueue]);
+  console.log(`Deleted integration Queue: ${names.integrationQueue}`);
+  wrangler(["queues", "delete", names.eventsQueue]);
+  console.log(`Deleted Artifacts events Queue: ${names.eventsQueue}`);
+  wrangler(["d1", "delete", names.database, "--skip-confirmation"]);
+  console.log(`Deleted D1 database: ${names.database}`);
+  await fs.rm(config, { force: true });
+  console.log(`Removed generated config: ${config}\n\nThe empty Artifacts namespace ${names.namespace} remains because Wrangler does not support namespace deletion.`);
 }

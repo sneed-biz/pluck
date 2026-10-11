@@ -16,7 +16,7 @@ npx wrangler login
 npm run pluck -- init --name my-pluck
 ```
 
-`init` creates or reuses a dedicated Artifacts namespace, mainline repository, D1 database, and two Queues; seeds mainline; applies migrations; deploys the Worker; and writes non-secret deployment configuration to `.pluck/my-pluck.wrangler.jsonc`. It prompts for Worker secrets and never writes them to disk. Rerun the command with the same name to reuse resources.
+`init` prints each created or reused resource, then creates or reuses a dedicated Artifacts namespace, mainline repository, D1 database, and two Queues; seeds mainline; applies migrations; deploys the Worker; and writes non-secret deployment configuration to `.pluck/my-pluck.wrangler.jsonc`. It prompts for Worker secrets and never writes them to disk. Its final output includes the environment variables and workspace commands for the next step. Rerun the command with the same name to reuse resources.
 
 For CI or other unattended setup, supply `--yes --name my-pluck` along with `PLUCK_API_TOKEN`, `BOOTSTRAP_TOKEN`, `PLUCK_OWNER_TOKEN`, and `CLOUDFLARE_API_TOKEN`. Set `CLOUDFLARE_ACCOUNT_ID` when Wrangler cannot infer the intended account.
 
@@ -99,6 +99,14 @@ npm run pluck -- review pluck/task-1:commit
 ```
 
 `review` issues short-lived read tokens through the authenticated Wrangler CLI, clones current mainline to a disposable local worktree, and cherry-picks the agent commit. Resolve any normal Git conflict, continue the cherry-pick, then confirm the generated patch. Pluck remains the only process that writes mainline. Use `--keep` to retain a worktree or `--no-editor` to skip launching `$EDITOR`.
+
+Deactivate a workspace and remove its native event subscription with `npm run pluck -- delete <repo-name> [namespace]`. This retains the Artifacts repository. To permanently remove a Pluck deployment's Worker, mainline repository, D1 database, Queues, and generated config, use an explicit name-matching confirmation:
+
+```sh
+npm run pluck -- destroy --name my-pluck --confirm my-pluck
+```
+
+Cloudflare's Wrangler CLI does not support deleting Artifacts namespaces, so `destroy` deliberately retains the empty namespace.
 
 Create a workspace repository with the owner credential:
 

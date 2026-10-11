@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 
-import { runInit } from "./init.js";
+import { runDestroy, runInit } from "./init.js";
 import { listConflicts, reviewJob } from "./review.js";
 
 const baseUrl = process.env.PLUCK_URL;
@@ -15,6 +15,16 @@ if (command === "init" || command === "setup") {
     return index === -1 ? undefined : args[index + 1];
   };
   await runInit({ name: option("--name"), accountId: option("--account-id"), yes: args.includes("--yes") });
+  process.exit();
+}
+
+if (command === "destroy") {
+  const args = [argument, patch, ...rest].filter((value): value is string => typeof value === "string");
+  const option = (name: string): string | undefined => {
+    const index = args.indexOf(name);
+    return index === -1 ? undefined : args[index + 1];
+  };
+  await runDestroy({ name: option("--name"), confirmation: option("--confirm") });
   process.exit();
 }
 
@@ -35,8 +45,8 @@ if (command === "review") {
   process.exit();
 }
 
-if (!baseUrl || (!token && command !== "create")) {
-  usage(command === "create" ? "PLUCK_URL is required" : "PLUCK_URL and PLUCK_TOKEN are required");
+if (!baseUrl || (!token && command !== "create" && command !== "delete")) {
+  usage(command === "create" || command === "delete" ? "PLUCK_URL is required" : "PLUCK_URL and PLUCK_TOKEN are required");
 }
 
 const routes: Record<string, string> = {
@@ -60,8 +70,21 @@ if (command === "create") {
   if (!response.ok) process.exitCode = 1;
   process.exit();
 }
+if (command === "delete") {
+  if (!argument) usage("usage: npm run pluck -- delete <repo-name> [namespace]");
+  if (!ownerToken) usage("PLUCK_OWNER_TOKEN is required for delete");
+  const namespace = patch ?? process.env.PLUCK_NAMESPACE ?? "pluck";
+  const response = await fetch(`${baseUrl!.replace(/\/$/, "")}/admin/workspaces/${encodeURIComponent(namespace)}/${encodeURIComponent(argument)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  const body = await response.json();
+  console.log(JSON.stringify(body, null, 2));
+  if (!response.ok) process.exitCode = 1;
+  process.exit();
+}
 const path = routes[command ?? ""];
-if (!path) usage("usage: npm run pluck -- init [--name <name>] [--account-id <id>] [--yes] | create <repo-name> [namespace] | jobs | conflicts | review <job-id> | queue | status <job-id> | retry <job-id> | resolve <job-id> <patch>");
+if (!path) usage("usage: npm run pluck -- init [--name <name>] [--account-id <id>] [--yes] | destroy --name <name> --confirm <name> | create <repo-name> [namespace] | delete <repo-name> [namespace] | jobs | conflicts | review <job-id> | queue | status <job-id> | retry <job-id> | resolve <job-id> <patch>");
 
 const response = await fetch(`${baseUrl!.replace(/\/$/, "")}${path}`, {
   method: command === "retry" || command === "resolve" ? "POST" : "GET",

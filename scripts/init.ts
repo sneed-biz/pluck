@@ -277,6 +277,10 @@ export async function runDestroy(options: DestroyOptions): Promise<void> {
 
   const config = path.join(".pluck", `${name}.wrangler.jsonc`);
   console.log(`\nDestroying Pluck deployment ${name}.`);
+  wrangler(["queues", "consumer", "remove", names.integrationQueue, names.worker]);
+  console.log(`Removed Worker consumer from Queue: ${names.integrationQueue}`);
+  wrangler(["queues", "consumer", "remove", names.eventsQueue, names.worker]);
+  console.log(`Removed Worker consumer from Queue: ${names.eventsQueue}`);
   wrangler(["delete", names.worker, "--force"]);
   console.log(`Deleted Worker: ${names.worker}`);
   wrangler(["artifacts", "repos", "delete", names.mainline, "--namespace", names.namespace, "--force"]);

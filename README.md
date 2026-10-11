@@ -106,7 +106,7 @@ Deactivate a workspace and remove its native event subscription with `npm run pl
 npm run pluck -- destroy --name my-pluck --confirm my-pluck
 ```
 
-Cloudflare's Wrangler CLI does not support deleting Artifacts namespaces, so `destroy` deliberately retains the empty namespace.
+`destroy` removes the Worker from both Queue consumers before deleting it. Cloudflare's Wrangler CLI does not support deleting Artifacts namespaces, so the command deliberately retains the empty namespace.
 
 Create a workspace repository with the owner credential:
 

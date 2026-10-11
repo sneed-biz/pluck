@@ -84,13 +84,8 @@ function stringValue(value: Record<string, unknown>, ...keys: string[]): string 
   return undefined;
 }
 
-function accountIdFromWhoami(value: unknown): string | undefined {
-  const candidates = records(value);
-  if (candidates.length === 0 && value && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return stringValue(object, "account_id", "id");
-  }
-  return candidates.map((candidate) => stringValue(candidate, "id", "account_id")).find(Boolean);
+export function accountIdFromWhoami(output: string): string | undefined {
+  return output.match(/\b[0-9a-f]{32}\b/i)?.[0];
 }
 
 function findResource(value: unknown, name: string, idKeys: string[]): string | undefined {
@@ -204,7 +199,7 @@ export async function runInit(options: InitOptions): Promise<void> {
   const name = options.name ?? process.env.PLUCK_DEPLOYMENT_NAME ?? (options.yes ? undefined : await prompt("Pluck deployment name: "));
   if (!name) throw new Error("Provide --name or PLUCK_DEPLOYMENT_NAME when using --yes");
   const names = deploymentNames(name);
-  const accountId = options.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID ?? accountIdFromWhoami(wranglerJson(["whoami"]));
+  const accountId = options.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID ?? accountIdFromWhoami(wrangler(["whoami"]));
   if (!accountId) throw new Error("Could not determine a Cloudflare account ID; pass --account-id");
 
   const configDirectory = path.join(".pluck");

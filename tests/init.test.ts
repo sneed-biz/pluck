@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deploymentNames, renderConfig } from "../scripts/init.js";
+import { accountIdFromWhoami, deploymentNames, renderConfig } from "../scripts/init.js";
 
 describe("pluck init", () => {
   it("derives isolated resource names from a deployment name", () => {
@@ -34,5 +34,10 @@ describe("pluck init", () => {
     });
     expect(JSON.stringify(config)).not.toContain("PLUCK_API_TOKEN");
     expect(JSON.stringify(config)).not.toContain("CLOUDFLARE_API_TOKEN");
+  });
+
+  it("extracts an account ID from Wrangler's text-only whoami output", () => {
+    expect(accountIdFromWhoami("Account ID\nabc123def456abc123def456abc123de\n")).toBe("abc123def456abc123def456abc123de");
+    expect(accountIdFromWhoami("Not logged in")).toBeUndefined();
   });
 });

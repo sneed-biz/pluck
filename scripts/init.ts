@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -206,6 +207,10 @@ async function requiredSecret(environment: string, label: string, nonInteractive
   return value;
 }
 
+function generatedSecret(environment: string): string {
+  return process.env[environment] ?? randomBytes(32).toString();
+}
+
 function putSecret(config: string, name: string, value: string): void {
   wrangler(["secret", "put", name, "--config", config], `${value}\n`);
 }
@@ -219,8 +224,9 @@ export async function runInit(options: InitOptions): Promise<void> {
 
   const configDirectory = path.join(".pluck");
   const config = path.join(configDirectory, `${name}.wrangler.jsonc`);
+  const existingConfig = existsSync(config);
   console.log(`\nInitializing Pluck deployment ${name} in Cloudflare account ${accountId}.`);
-  if (existsSync(config)) console.log(`Reusing generated config: ${config}`);
+  if (existingConfig) console.log(`Reusing generated config: ${config}`);
   await fs.mkdir(configDirectory, { recursive: true });
   const database = ensureDatabase(names.database);
   console.log(`${database.created ? "Created" : "Reused"} D1 database: ${names.database}`);
@@ -238,13 +244,22 @@ export async function runInit(options: InitOptions): Promise<void> {
   wrangler(["d1", "migrations", "apply", names.database, "--remote", "--config", config]);
   console.log("Deploying Pluck Worker...");
   wrangler(["deploy", "--config", config]);
-  console.log("Storing Worker secrets...");
-  putSecret(config, "PLUCK_API_TOKEN", await requiredSecret("PLUCK_API_TOKEN", "PLUCK_API_TOKEN", options.yes));
-  putSecret(config, "BOOTSTRAP_TOKEN", await requiredSecret("BOOTSTRAP_TOKEN", "BOOTSTRAP_TOKEN", options.yes));
-  const ownerToken = await requiredSecret("PLUCK_OWNER_TOKEN", "Initial workspace owner token", options.yes);
-  const ownerId = process.env.PLUCK_OWNER_ID ?? "owner-1";
-  putSecret(config, "WORKSPACE_OWNER_TOKENS", JSON.stringify({ [ownerToken]: ownerId }));
-  putSecret(config, "CLOUDFLARE_API_TOKEN", await requiredSecret("CLOUDFLARE_API_TOKEN", "Runtime Cloudflare API token", options.yes));
+  let apiToken: string | undefined;
+  let ownerToken: string | undefined;
+  if (existingConfig) {
+    console.log("Retaining existing Worker secrets.");
+  } else {
+    console.log("Generating Pluck access tokens and storing Worker secrets...");
+    apiToken = generatedSecret("PLUCK_API_TOKEN");
+    const bootstrapToken = generatedSecret("BOOTSTRAP_TOKEN");
+    ownerToken = generatedSecret("PLUCK_OWNER_TOKEN");
+    const ownerId = process.env.PLUCK_OWNER_ID ?? "owner-1";
+    putSecret(config, "PLUCK_API_TOKEN", apiToken);
+    putSecret(config, "BOOTSTRAP_TOKEN", bootstrapToken);
+    putSecret(config, "WORKSPACE_OWNER_TOKENS", JSON.stringify({ [ownerToken]: ownerId }));
+    const runtimeToken = process.env.CLOUDFLARE_API_TOKEN ?? await requiredSecret("PLUCK_RUNTIME_CLOUDFLARE_API_TOKEN", "Runtime Cloudflare API token", options.yes);
+    putSecret(config, "CLOUDFLARE_API_TOKEN", runtimeToken);
+  }
   console.log(`
 Pluck is ready.
 
@@ -259,7 +274,8 @@ Resources:
 
 Next steps:
   export PLUCK_URL=https://${names.worker}.<account>.workers.dev
-  export PLUCK_OWNER_TOKEN='<the owner token you entered>'
+  ${ownerToken ? `export PLUCK_OWNER_TOKEN='${ownerToken}'` : "# Reuse the PLUCK_OWNER_TOKEN saved from the first initialization."}
+  ${apiToken ? `export PLUCK_TOKEN='${apiToken}'` : "# Reuse the PLUCK_TOKEN saved from the first initialization."}
   export PLUCK_NAMESPACE=${names.namespace}
   export PLUCK_MAINLINE_REPO=${names.mainline}
   npm run pluck -- create agent-a

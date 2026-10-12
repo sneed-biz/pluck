@@ -58,4 +58,9 @@ describe("pluck init", () => {
     expect(workerUrlFromDeployOutput("Published\nhttps://my-pluck.account.workers.dev\n")).toBe("https://my-pluck.account.workers.dev");
     expect(renderLocalConfig({ url: "https://my-pluck.account.workers.dev", apiToken: "api", ownerToken: "owner", namespace: "my-pluck", mainline: "my-pluck-mainline" })).toContain("PLUCK_MAINLINE_REPO=my-pluck-mainline");
   });
+
+  it("only emits ASCII local configuration values", () => {
+    const config = renderLocalConfig({ url: "https://my-pluck.account.workers.dev", apiToken: "a".repeat(64), ownerToken: "b".repeat(64), namespace: "my-pluck", mainline: "my-pluck-mainline" });
+    expect(config).toMatch(/^[\x00-\x7F]*$/);
+  });
 });

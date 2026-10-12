@@ -214,7 +214,7 @@ async function requiredSecret(environment: string, label: string, nonInteractive
 }
 
 function generatedSecret(environment: string): string {
-  return process.env[environment] ?? randomBytes(32).toString();
+  return process.env[environment] ?? Buffer.from(randomBytes(32)).toString("hex");
 }
 
 export function workerUrlFromDeployOutput(output: string): string | undefined {
@@ -300,8 +300,8 @@ Resources:
   Generated config: ${config}
 
 Next steps:
-  npm run pluck -- create agent-a
-  npm run pluck -- create agent-b
+  npm run pluck -- create artifacts-repo-a
+  npm run pluck -- create artifacts-repo-b
 
 The CLI automatically reads .pluck/${name}.env for this deployment. Set PLUCK_CONFIG to select a config file when you have multiple deployments.`);
 }

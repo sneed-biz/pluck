@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -211,6 +211,21 @@ function generatedSecret(environment: string): string {
   return process.env[environment] ?? randomBytes(32).toString();
 }
 
+export function workerUrlFromDeployOutput(output: string): string | undefined {
+  return output.match(/https:\/\/[^\s]+\.workers\.dev\b/)?.[0];
+}
+
+export function renderLocalConfig(values: { url: string; apiToken: string; ownerToken: string; namespace: string; mainline: string }): string {
+  return [
+    `PLUCK_URL=${values.url}`,
+    `PLUCK_TOKEN=${values.apiToken}`,
+    `PLUCK_OWNER_TOKEN=${values.ownerToken}`,
+    `PLUCK_NAMESPACE=${values.namespace}`,
+    `PLUCK_MAINLINE_REPO=${values.mainline}`,
+    "",
+  ].join("\n");
+}
+
 function putSecret(config: string, name: string, value: string): void {
   wrangler(["secret", "put", name, "--config", config], `${value}\n`);
 }
@@ -224,6 +239,7 @@ export async function runInit(options: InitOptions): Promise<void> {
 
   const configDirectory = path.join(".pluck");
   const config = path.join(configDirectory, `${name}.wrangler.jsonc`);
+  const localConfig = path.join(configDirectory, `${name}.env`);
   const existingConfig = existsSync(config);
   console.log(`\nInitializing Pluck deployment ${name} in Cloudflare account ${accountId}.`);
   if (existingConfig) console.log(`Reusing generated config: ${config}`);
@@ -243,7 +259,7 @@ export async function runInit(options: InitOptions): Promise<void> {
   console.log("Applying D1 migrations...");
   wrangler(["d1", "migrations", "apply", names.database, "--remote", "--config", config]);
   console.log("Deploying Pluck Worker...");
-  wrangler(["deploy", "--config", config]);
+  const deploymentOutput = wrangler(["deploy", "--config", config]);
   let apiToken: string | undefined;
   let ownerToken: string | undefined;
   if (existingConfig) {
@@ -259,6 +275,11 @@ export async function runInit(options: InitOptions): Promise<void> {
     putSecret(config, "WORKSPACE_OWNER_TOKENS", JSON.stringify({ [ownerToken]: ownerId }));
     const runtimeToken = process.env.CLOUDFLARE_API_TOKEN ?? await requiredSecret("PLUCK_RUNTIME_CLOUDFLARE_API_TOKEN", "Runtime Cloudflare API token", options.yes);
     putSecret(config, "CLOUDFLARE_API_TOKEN", runtimeToken);
+    const workerUrl = workerUrlFromDeployOutput(deploymentOutput);
+    if (!workerUrl) throw new Error("Could not determine the deployed Worker URL; no local Pluck configuration was written");
+    await fs.writeFile(localConfig, renderLocalConfig({ url: workerUrl, apiToken, ownerToken, namespace: names.namespace, mainline: names.mainline }), { mode: 0o600 });
+    chmodSync(localConfig, 0o600);
+    console.log(`Wrote local CLI configuration: ${localConfig}`);
   }
   console.log(`
 Pluck is ready.
@@ -273,15 +294,10 @@ Resources:
   Generated config: ${config}
 
 Next steps:
-  export PLUCK_URL=https://${names.worker}.<account>.workers.dev
-  ${ownerToken ? `export PLUCK_OWNER_TOKEN='${ownerToken}'` : "# Reuse the PLUCK_OWNER_TOKEN saved from the first initialization."}
-  ${apiToken ? `export PLUCK_TOKEN='${apiToken}'` : "# Reuse the PLUCK_TOKEN saved from the first initialization."}
-  export PLUCK_NAMESPACE=${names.namespace}
-  export PLUCK_MAINLINE_REPO=${names.mainline}
   npm run pluck -- create agent-a
   npm run pluck -- create agent-b
 
-Set PLUCK_TOKEN to the control API token you entered before running jobs, conflicts, or review commands.`);
+The CLI automatically reads .pluck/${name}.env for this deployment. Set PLUCK_CONFIG to select a config file when you have multiple deployments.`);
 }
 
 export async function runDestroy(options: DestroyOptions): Promise<void> {
@@ -292,6 +308,7 @@ export async function runDestroy(options: DestroyOptions): Promise<void> {
   if (confirmation !== name) throw new Error("Destruction cancelled: confirmation did not match the deployment name");
 
   const config = path.join(".pluck", `${name}.wrangler.jsonc`);
+  const localConfig = path.join(".pluck", `${name}.env`);
   console.log(`\nDestroying Pluck deployment ${name}.`);
   wrangler(["queues", "consumer", "remove", names.integrationQueue, names.worker]);
   console.log(`Removed Worker consumer from Queue: ${names.integrationQueue}`);
@@ -308,5 +325,6 @@ export async function runDestroy(options: DestroyOptions): Promise<void> {
   wrangler(["d1", "delete", names.database, "--skip-confirmation"]);
   console.log(`Deleted D1 database: ${names.database}`);
   await fs.rm(config, { force: true });
-  console.log(`Removed generated config: ${config}\n\nThe empty Artifacts namespace ${names.namespace} remains because Wrangler does not support namespace deletion.`);
+  await fs.rm(localConfig, { force: true });
+  console.log(`Removed generated config and local credentials: ${config}\n\nThe empty Artifacts namespace ${names.namespace} remains because Wrangler does not support namespace deletion.`);
 }

@@ -1,7 +1,11 @@
 #!/usr/bin/env -S npx tsx
 
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import nodePath from "node:path";
 import { runDestroy, runInit } from "./init.js";
 import { listConflicts, reviewJob } from "./review.js";
+
+loadLocalConfig();
 
 const baseUrl = process.env.PLUCK_URL;
 const token = process.env.PLUCK_TOKEN;
@@ -98,4 +102,18 @@ if (!response.ok) process.exitCode = 1;
 function usage(message: string): never {
   console.error(message);
   process.exit(2);
+}
+
+function loadLocalConfig(): void {
+  const explicit = process.env.PLUCK_CONFIG;
+  const configs = explicit ? [explicit] : existsSync(".pluck")
+    ? readdirSync(".pluck").filter((file) => file.endsWith(".env")).map((file) => nodePath.join(".pluck", file))
+    : [];
+  if (configs.length !== 1 || !existsSync(configs[0])) return;
+  for (const line of readFileSync(configs[0], "utf8").split("\n")) {
+    const separator = line.indexOf("=");
+    if (separator < 1) continue;
+    const key = line.slice(0, separator);
+    if (!process.env[key]) process.env[key] = line.slice(separator + 1);
+  }
 }

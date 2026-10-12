@@ -16,17 +16,13 @@ npx wrangler login
 npm run pluck -- init --name my-pluck
 ```
 
-`init` prints each created or reused resource, then creates or reuses a dedicated Artifacts namespace, mainline repository, D1 database, and two Queues; seeds mainline; applies migrations; deploys the Worker; and writes non-secret deployment configuration to `.pluck/my-pluck.wrangler.jsonc`. It generates Pluck's control and initial owner tokens locally, stores them as Worker secrets, and prints the two tokens needed for the next steps once. It reuses `CLOUDFLARE_API_TOKEN` as the runtime subscription-management secret when available; otherwise it prompts for `PLUCK_RUNTIME_CLOUDFLARE_API_TOKEN`. Rerun the command with the same name to reuse resources.
+`init` prints each created or reused resource, then creates or reuses a dedicated Artifacts namespace, mainline repository, D1 database, and two Queues; seeds mainline; applies migrations; deploys the Worker; and writes non-secret deployment configuration to `.pluck/my-pluck.wrangler.jsonc`. It also writes the generated control token, owner token, URL, namespace, and mainline name to the ignored mode-`0600` `.pluck/my-pluck.env` file; the CLI loads it automatically when it is the only local deployment. Set `PLUCK_CONFIG` to select an `.env` file when you have multiple deployments. It reuses `CLOUDFLARE_API_TOKEN` as the runtime subscription-management secret when available; otherwise it prompts for `PLUCK_RUNTIME_CLOUDFLARE_API_TOKEN`. Rerun the command with the same name to reuse resources.
 
 For CI or other unattended setup, supply `--yes --name my-pluck` with `CLOUDFLARE_API_TOKEN`. Optionally set `PLUCK_API_TOKEN`, `BOOTSTRAP_TOKEN`, and `PLUCK_OWNER_TOKEN` to provide stable values rather than generated ones. Set `CLOUDFLARE_ACCOUNT_ID` when Wrangler cannot infer the intended account.
 
-After setup, use the displayed Worker URL and the workspace-owner token to provision a workspace. Add `.agent/context.md`, make a linear commit on `main`, and push it; its native Artifacts push event starts integration automatically.
+After setup, the CLI uses its local deployment configuration to provision workspaces. Add `.agent/context.md`, make a linear commit on `main`, and push it; its native Artifacts push event starts integration automatically.
 
 ```sh
-export PLUCK_URL=https://my-pluck.<account>.workers.dev
-export PLUCK_OWNER_TOKEN='the-owner-token-you-provided-to-init'
-export PLUCK_NAMESPACE=my-pluck
-export PLUCK_MAINLINE_REPO=my-pluck-mainline
 npm run pluck -- create agent-a
 npm run pluck -- create agent-b
 ```

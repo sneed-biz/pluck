@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountIdFromWhoami, deploymentNames, queueIdFromList, renderConfig } from "../scripts/init.js";
+import { accountIdFromWhoami, deploymentNames, queueIdFromList, renderConfig, renderLocalConfig, workerUrlFromDeployOutput } from "../scripts/init.js";
 
 describe("pluck init", () => {
   it("derives isolated resource names from a deployment name", () => {
@@ -52,5 +52,10 @@ describe("pluck init", () => {
     ].join("\n");
     expect(queueIdFromList(output, "pluck-events")).toBe("1234567890abcdef1234567890abcdef");
     expect(queueIdFromList(output, "missing")).toBeUndefined();
+  });
+
+  it("stores a usable local CLI configuration from Wrangler's deployment output", () => {
+    expect(workerUrlFromDeployOutput("Published\nhttps://my-pluck.account.workers.dev\n")).toBe("https://my-pluck.account.workers.dev");
+    expect(renderLocalConfig({ url: "https://my-pluck.account.workers.dev", apiToken: "api", ownerToken: "owner", namespace: "my-pluck", mainline: "my-pluck-mainline" })).toContain("PLUCK_MAINLINE_REPO=my-pluck-mainline");
   });
 });

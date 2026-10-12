@@ -27,6 +27,12 @@ export type DeploymentNames = {
 };
 
 const namePattern = /^[a-z0-9][a-z0-9-]{0,52}[a-z0-9]$|^[a-z0-9]$/;
+export const pluckBanner = `
+  ▀▀▀▀▀██▄ ▀▀▀      ▓▒░  ▓▒░ ▀▀▀▀▀█░▒ █▓▒  ███
+  ▓▒░  ███ ▓▒░      ▀▀▀  ▒░█ ▓▒░  ██░ ▀▀▀  ██▀
+  ▒░█▄▀▀▀  ▒░█      ▓▒░  ░██ ▒░█      ▒░ ▀▀█▄
+  ░██      ░██  ▒░  ▒░█  ███ ░██  ▒░  ░ █  ██░
+  ███      ▀██▄▄███ ▀██▄▄██▀ ▀██▄▄███ ███  █░▒`;
 
 export function deploymentNames(name: string): DeploymentNames {
   if (!namePattern.test(name)) throw new Error("Deployment names must be 1-54 lowercase letters, digits, or dashes, and cannot start or end with a dash");

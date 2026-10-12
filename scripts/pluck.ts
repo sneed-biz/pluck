@@ -2,10 +2,11 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import nodePath from "node:path";
-import { runDestroy, runInit } from "./init.js";
+import { pluckBanner, runDestroy, runInit } from "./init.js";
 import { listConflicts, reviewJob } from "./review.js";
 
 loadLocalConfig();
+console.log(pluckBanner);
 
 const baseUrl = process.env.PLUCK_URL;
 const token = process.env.PLUCK_TOKEN;

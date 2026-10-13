@@ -1,6 +1,6 @@
 # Pluck
 
-Pluck is an MCP-native coordination layer for Cloudflare Artifacts. This repository contains the patch integration spike and the first Cloudflare Worker vertical slice.
+Pluck is a coordination layer for Cloudflare Artifacts. This repository contains the patch integration spike and the first Cloudflare Worker vertical slice. Its primary workflow is normal Git pushes with Cloudflare-native event delivery; an optional MCP server provides an agent-facing adapter for control and recovery operations.
 
 Pluck is inspired by Cloudflare's [Artifacts Git platform](https://blog.cloudflare.com/next-git-platform-on-cloudflare/). The implementation in this repository is independently authored and is licensed under the MIT License.
 
@@ -61,7 +61,35 @@ The probe reports whether the installed `isomorphic-git` version exposes a patch
 
 Workspace agents continue to use normal Git commits and pushes. The Artifacts push event is the automatic delivery signal; Pluck does not require a second submit call for a successful push.
 
-The Worker exposes an authenticated read/recovery API for MCP and human clients:
+### Optional MCP access
+
+The MCP server is a convenience interface for coding agents, not the primary write path. It adapts the authenticated control API into tools for inspecting jobs and queue health and for authorized recovery actions. Git pushes, native Artifacts events, and Pluck's validation pipeline remain the way changes enter mainline.
+
+The MCP adapter will not create commits, force-push mainline, or bypass source-parent, context, trailer, patch, or compare-and-swap validation.
+
+Run the local stdio MCP server with the same deployment configuration as the CLI. It loads the sole `.pluck/*.env` file automatically, or use `PLUCK_CONFIG` to select one explicitly. `PLUCK_URL` and `PLUCK_TOKEN` are required; set `PLUCK_OWNER_TOKEN` only when the MCP client should manage workspaces.
+
+```sh
+npm run mcp
+```
+
+For an MCP client that runs project commands through `npx`, configure it with:
+
+```json
+{
+  "mcpServers": {
+    "pluck": {
+      "command": "npx",
+      "args": ["tsx", "scripts/mcp.ts"],
+      "cwd": "/path/to/pluck"
+    }
+  }
+}
+```
+
+The server provides `list_jobs`, `get_job`, `get_queue_status`, `retry_job`, and `resolve_job`. When `PLUCK_OWNER_TOKEN` is configured, it also provides `create_workspace` and `delete_workspace`.
+
+The Worker exposes an authenticated read/recovery API for the CLI, MCP adapter, and other human or automated clients:
 
 - `GET /api/jobs?limit=25` lists recent integration jobs.
 - `GET /api/queue` returns D1-backed counts by job status.
@@ -114,7 +142,7 @@ npm run pluck -- create my-new-repo pluck
 
 The command returns the provisioned Artifacts `remote` and short-lived Git `token`. Use those values to clone or set a Git remote, add `.agent/context.md`, and push a linear commit to `main`.
 
-The API is intentionally read-first. It cannot create commits, force-push mainline, or bypass source-parent, context, trailer, or patch validation. An MCP server can expose these same operations to agents without creating a competing write path.
+The API is intentionally read-first. It cannot create commits, force-push mainline, or bypass source-parent, context, trailer, or patch validation. The MCP adapter exposes these same operations to agents without creating a competing write path.
 
 ## Isolated test app
 

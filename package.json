@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "pluck": "scripts/pluck.ts"
+    "pluck": "scripts/pluck.ts",
+    "pluck-mcp": "scripts/mcp.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -12,6 +13,7 @@
     "test:repo": "tsx scripts/test-local-repo.ts",
     "test:stress": "tsx scripts/stress-multi-agent.ts",
     "pluck": "tsx scripts/pluck.ts",
+    "mcp": "tsx scripts/mcp.ts",
     "dev": "wrangler dev",
     "dev:test": "wrangler dev --config wrangler.test.jsonc",
     "deploy": "wrangler deploy",
@@ -22,8 +24,10 @@
     "queues:create:test": "wrangler queues create pluck-test-artifacts-events"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "diff": "^9.0.0",
-    "isomorphic-git": "^1.28.0"
+    "isomorphic-git": "^1.28.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261003.1",

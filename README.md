@@ -6,6 +6,8 @@ Inspired by Cloudflare's [Artifacts Git platform](https://blog.cloudflare.com/ne
 
 ## How it works
 
+![Pluck architecture](docs/architecture.png)
+
 1. Each agent gets its own Artifacts repository (workspace) and pushes a single linear commit to `main`, including `.agent/context.md` explaining the change.
 2. Artifacts delivers a native `cf.artifacts.repo.pushed` event to a Queue. No webhook, no submit step.
 3. The consumer validates the workspace, dedupes the event in D1, and enqueues an integration job.
@@ -32,7 +34,17 @@ The CLI loads the `.env` automatically when there is only one deployment; otherw
 
 Unattended setup: `--yes --name my-pluck` with `CLOUDFLARE_API_TOKEN`. Optionally set `PLUCK_API_TOKEN`, `BOOTSTRAP_TOKEN`, `PLUCK_OWNER_TOKEN` for stable values, and `CLOUDFLARE_ACCOUNT_ID` if Wrangler can't infer the account.
 
-## Demo: two agents, one conflict
+## Try it: concurrent agents demo
+
+After `init`, one command runs the whole story:
+
+```sh
+npm run demo            # 6 agents; or: npm run demo -- 12 --keep
+```
+
+It creates one Artifacts workspace per agent, has all agents commit and push at the same time, and prints a live timeline as Pluck integrates each push into mainline. Independent changes all land (racing pushes are resolved by CAS retry); two agents that write the same file collide, so one is recorded as a `conflict`. It ends by printing mainline history with the `Agent-*` provenance trailers. Resolve the conflict with `npm run pluck -- review <job-id>`. Workspaces are removed afterwards unless `--keep` is set.
+
+## Demo (manual): two agents, one conflict
 
 ```sh
 npm run pluck -- create agent-a

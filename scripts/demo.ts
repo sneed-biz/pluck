@@ -3,7 +3,12 @@
 // Scripted demo: N agents work concurrently in their own Artifacts repos,
 // Pluck integrates them into mainline, and two agents deliberately collide.
 //
-//   npm run demo -- [agents=6] [--keep]
+//   npm run demo -- [agents=6] [--keep] [--llm]
+//
+// --llm: each agent is a real LLM call (any OpenAI-compatible chat API) that writes
+// its own change and .agent/context.md. Set LLM_API_KEY, LLM_MODEL and optionally
+// LLM_BASE_URL (default https://api.openai.com/v1). Falls back to the scripted
+// change for an agent if the model output is unusable.
 //
 // Needs a deployed Pluck (`npm run pluck -- init`) and wrangler auth.
 
@@ -17,6 +22,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const args = process.argv.slice(2);
 const keep = args.includes("--keep");
+const useLlm = args.includes("--llm");
 const agentCount = Number(args.find((arg) => /^\d+$/.test(arg)) ?? 6);
 if (!Number.isInteger(agentCount) || agentCount < 3 || agentCount > 30) fail("Agent count must be between 3 and 30");
 
@@ -37,12 +43,22 @@ const red = (text: string) => `\x1b[31m${text}\x1b[0m`;
 const log = (message: string) => console.log(`${dim(`[${((Date.now() - start) / 1000).toFixed(1).padStart(5)}s]`)} ${message}`);
 
 type Job = { id: string; sourceRepo: string; status: string; detail: string | null; attemptCount: number };
-type Agent = { name: string; repo: string; role: "independent" | "collider"; jobId?: string };
+type Agent = { name: string; repo: string; role: "independent" | "collider"; task: string; jobId?: string };
+
+const independentTasks = [
+  "Add a small TypeScript utility module src/slugify.ts exporting slugify(text: string): string, with a short doc comment.",
+  "Add src/clamp.ts exporting clamp(value: number, min: number, max: number): number, and docs/clamp.md explaining it.",
+  "Add src/retry.ts exporting an async retry(fn, attempts) helper with exponential backoff.",
+  "Add src/chunk.ts exporting chunk<T>(items: T[], size: number): T[][].",
+  "Add docs/CONTRIBUTING.md with a short contributing guide for an agent-driven repository.",
+  "Add src/format-bytes.ts exporting formatBytes(n: number): string.",
+];
+const colliderTask = "Create docs/RELEASE_NOTES.md announcing version 1.0.0 of this project. Choose your own headline and highlights.";
 
 const agents: Agent[] = [];
-for (let i = 1; i <= agentCount - 2; i++) agents.push({ name: `agent-${i}`, repo: `demo-${run}-agent-${i}`, role: "independent" });
-agents.push({ name: "agent-x", repo: `demo-${run}-agent-x`, role: "collider" });
-agents.push({ name: "agent-y", repo: `demo-${run}-agent-y`, role: "collider" });
+for (let i = 1; i <= agentCount - 2; i++) agents.push({ name: `agent-${i}`, repo: `demo-${run}-agent-${i}`, role: "independent", task: independentTasks[(i - 1) % independentTasks.length] });
+agents.push({ name: "agent-x", repo: `demo-${run}-agent-x`, role: "collider", task: colliderTask });
+agents.push({ name: "agent-y", repo: `demo-${run}-agent-y`, role: "collider", task: colliderTask });
 
 console.log(bold(`\nPluck demo: ${agentCount} agents, one shared mainline (${namespace}/${mainlineName})\n`));
 
@@ -71,7 +87,13 @@ async function runAgent(agent: Agent, mainlineDir: string, base: string): Promis
   const created = await api<{ remote: string; token: string }>("/admin/workspaces", "POST", ownerToken, { namespace, repoName: agent.repo });
   const dir = path.join(root, agent.name);
   await fs.cp(mainlineDir, dir, { recursive: true });
-  if (agent.role === "independent") {
+  const generated = useLlm ? await llmChange(agent, dir) : undefined;
+  if (generated) {
+    for (const file of generated.files) {
+      await fs.mkdir(path.dirname(path.join(dir, file.path)), { recursive: true });
+      await fs.writeFile(path.join(dir, file.path), file.content);
+    }
+  } else if (agent.role === "independent") {
     await fs.mkdir(path.join(dir, "demo", run), { recursive: true });
     await fs.writeFile(path.join(dir, "demo", run, `${agent.name}.txt`), `Written by ${agent.name}\n`);
   } else {
@@ -79,11 +101,11 @@ async function runAgent(agent: Agent, mainlineDir: string, base: string): Promis
     await fs.writeFile(path.join(dir, "demo", run, "shared.md"), `# Shared plan\n\n${agent.name} wants this file to say: ${agent.name === "agent-x" ? "ship it" : "hold on"}\n`);
   }
   await fs.mkdir(path.join(dir, ".agent"), { recursive: true });
-  await fs.writeFile(path.join(dir, ".agent", "context.md"), `# ${agent.name}\n\nTask: demo run ${run}.\nRole: ${agent.role}.\n`);
+  await fs.writeFile(path.join(dir, ".agent", "context.md"), generated?.context ?? `# ${agent.name}\n\nTask: demo run ${run}.\nRole: ${agent.role}.\n`);
   await git(dir, ["config", "user.name", agent.name]);
   await git(dir, ["config", "user.email", `${agent.name}@pluck.demo`]);
   await git(dir, ["add", "."]);
-  await git(dir, ["commit", "--quiet", "-m", `${agent.name}: demo change`]);
+  await git(dir, ["commit", "--quiet", "-m", generated?.message ?? `${agent.name}: demo change`]);
   const url = new URL(created.remote);
   url.username = "x";
   url.password = created.token.split("?")[0];
@@ -93,6 +115,37 @@ async function runAgent(agent: Agent, mainlineDir: string, base: string): Promis
   // Native Artifacts events normally trigger this; submitting is idempotent and makes the demo deterministic.
   const submitted = await api<{ jobId: string }>("/api/jobs", "POST", apiToken, { namespace, repoName: agent.repo, ref: "refs/heads/main", before: base, after });
   agent.jobId = submitted.jobId;
+}
+
+type Change = { files: { path: string; content: string }[]; context: string; message: string };
+
+async function llmChange(agent: Agent, dir: string): Promise<Change | undefined> {
+  const key = need("LLM_API_KEY");
+  const model = need("LLM_MODEL");
+  const endpoint = `${(process.env.LLM_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`;
+  const existing = (await git(dir, ["ls-files"])).split("\n").filter(Boolean).slice(0, 50).join("\n");
+  const prompt = `You are ${agent.name}, a coding agent working in your own Git repository. Task: ${agent.task}\n\nExisting files:\n${existing || "(none)"}\n\nReply with ONLY a JSON object: {"files":[{"path":"relative/path","content":"full file content"}],"context":"markdown explaining what you changed and why","message":"one-line commit message"}. Create or fully rewrite at most 3 files. Do not touch .agent/ or .git/.`;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!response.ok) throw new Error(`LLM API ${response.status}`);
+      const text = ((await response.json()) as { choices: { message: { content: string } }[] }).choices[0].message.content;
+      const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as Change;
+      const valid = Array.isArray(parsed.files) && parsed.files.length > 0 && parsed.files.length <= 3 && typeof parsed.context === "string" && parsed.context.trim() !== "" &&
+        parsed.files.every((file) => typeof file.path === "string" && typeof file.content === "string" && !path.isAbsolute(file.path) && !file.path.split("/").some((part) => part === ".." || part === ".git" || part === ".agent"));
+      if (!valid) throw new Error("model output failed validation");
+      log(`${agent.name} (LLM) planned: ${parsed.files.map((file) => file.path).join(", ")}`);
+      return { files: parsed.files, context: parsed.context, message: typeof parsed.message === "string" && parsed.message ? parsed.message.split("\n")[0] : `${agent.name}: ${agent.task.slice(0, 60)}` };
+    } catch (error) {
+      log(`${agent.name} LLM attempt ${attempt} failed: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  log(`${agent.name} falling back to scripted change`);
+  return undefined;
 }
 
 async function waitForJobs(list: Agent[]): Promise<Job[]> {

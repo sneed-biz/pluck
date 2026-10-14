@@ -39,8 +39,21 @@ Unattended setup: `--yes --name my-pluck` with `CLOUDFLARE_API_TOKEN`. Optionall
 After `init`, one command runs the whole story:
 
 ```sh
-npm run demo            # 6 agents; or: npm run demo -- 12 --keep
+npm run demo            # 6 scripted agents; or: npm run demo -- 12 --keep
 ```
+
+### LLM mode
+
+`--llm` makes every agent a real model call instead of a scripted change. Each agent receives a small task, writes its own files plus an `.agent/context.md` explaining why, and pushes. Two agents are given the same task so they collide. Any OpenAI-compatible chat completions API works:
+
+```sh
+export LLM_API_KEY=...                       # keep it in your local .env
+export LLM_MODEL=gpt-4o-mini                 # any model your endpoint serves
+export LLM_BASE_URL=https://api.openai.com/v1   # optional; point at any compatible provider
+npm run demo -- 6 --llm
+```
+
+Unusable model output is retried once, then that agent falls back to the scripted change. Agents can also drive Pluck directly through the [MCP server](docs/mcp.md).
 
 It creates one Artifacts workspace per agent, has all agents commit and push at the same time, and prints a live timeline as Pluck integrates each push into mainline. Independent changes all land (racing pushes are resolved by CAS retry); two agents that write the same file collide, so one is recorded as a `conflict`. It ends by printing mainline history with the `Agent-*` provenance trailers. Resolve the conflict with `npm run pluck -- review <job-id>`. Workspaces are removed afterwards unless `--keep` is set.
 

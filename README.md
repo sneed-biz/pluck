@@ -1,24 +1,21 @@
 # Pluck
 
-Pluck lets coding agents work concurrently in isolated Cloudflare Artifacts repositories while safely integrating their changes into a shared mainline. Agents use normal Git; Pluck supplies native event delivery, conflict-safe integration, and per-change provenance.
+Pluck lets coding agents work concurrently in isolated Cloudflare Artifacts repositories and integrates their changes into a shared mainline. Agents use normal Git; Pluck handles event delivery, conflict-safe integration, and per-change provenance.
 
-Pluck is inspired by Cloudflare's [Artifacts Git platform](https://blog.cloudflare.com/next-git-platform-on-cloudflare/). The implementation in this repository is independently authored and is licensed under the MIT License.
+Inspired by Cloudflare's [Artifacts Git platform](https://blog.cloudflare.com/next-git-platform-on-cloudflare/). Independently authored, MIT licensed.
 
-Built for Cloudflare's [next Git platform competition](https://blog.cloudflare.com/next-git-platform-on-cloudflare/).
+## How it works
 
-## Why Pluck
-
-Pluck is not a second Git hosting UI or an agent wrapper around an existing forge. It makes the agent workspace, change rationale, delivery signal, and integration result explicit parts of the Git workflow:
-
-- Each agent works in an isolated Artifacts repository, so concurrent work never shares a branch or working tree.
-- Every proposed change includes `.agent/context.md`; Pluck records that rationale in structured `Agent-*` trailers on the integrated mainline commit.
-- A native `cf.artifacts.repo.pushed` event starts integration after an ordinary Git push. There is no webhook endpoint or separate submit step.
-- Pluck applies a linear single-commit change to current mainline with compare-and-swap semantics. A stale or conflicting change is recorded for review, never force-pushed or partially applied.
-- The conflict-review command recreates the merge locally in a disposable worktree, then submits the resulting unified patch to Pluck for the same validation pipeline.
+1. Each agent gets its own Artifacts repository (workspace) and pushes a single linear commit to `main`, including `.agent/context.md` explaining the change.
+2. Artifacts delivers a native `cf.artifacts.repo.pushed` event to a Queue. No webhook, no submit step.
+3. The consumer validates the workspace, dedupes the event in D1, and enqueues an integration job.
+4. The integrator requires a single commit whose parent matches the push `before` SHA, applies its diff to current mainline, and requires `.agent/context.md`.
+5. On success it pushes a new mainline commit with `Agent-Task`, `Agent-Workspace`, `Agent-Source-Commit`, and `Agent-Context` trailers. The push is never forced; a non-fast-forward rejection triggers a re-read and retry (3 attempts, each recorded in D1).
+6. If the patch does not apply or retries are exhausted, the job is recorded as a `conflict` and nothing is pushed.
 
 ## Quickstart
 
-You need a Cloudflare Workers Paid plan with Artifacts access, Node.js, Git, and either an authenticated Wrangler session (`npx wrangler login`) or a `CLOUDFLARE_API_TOKEN` with access to your target account.
+Requires a Workers Paid plan with Artifacts access, Node.js, Git, and either `npx wrangler login` or a `CLOUDFLARE_API_TOKEN`.
 
 ```sh
 npm install
@@ -26,28 +23,50 @@ npx wrangler login
 npm run pluck -- init --name my-pluck
 ```
 
-`init` prints each created or reused resource, then creates or reuses a dedicated Artifacts namespace, mainline repository, D1 database, and two Queues; seeds mainline; applies migrations; deploys the Worker; and writes non-secret deployment configuration to `.pluck/my-pluck.wrangler.jsonc`. It also writes the generated control token, owner token, URL, namespace, and mainline name to the ignored mode-`0600` `.pluck/my-pluck.env` file; the CLI loads it automatically when it is the only local deployment. Set `PLUCK_CONFIG` to select an `.env` file when you have multiple deployments. It reuses `CLOUDFLARE_API_TOKEN` as the runtime subscription-management secret when available; otherwise it prompts for `PLUCK_RUNTIME_CLOUDFLARE_API_TOKEN`. Rerun the command with the same name to reuse resources.
+`init` creates or reuses an Artifacts namespace, mainline repo, D1 database, and two Queues; seeds mainline; applies migrations; deploys the Worker; and writes:
 
-For CI or other unattended setup, supply `--yes --name my-pluck` with `CLOUDFLARE_API_TOKEN`. Optionally set `PLUCK_API_TOKEN`, `BOOTSTRAP_TOKEN`, and `PLUCK_OWNER_TOKEN` to provide stable values rather than generated ones. Set `CLOUDFLARE_ACCOUNT_ID` when Wrangler cannot infer the intended account.
+- `.pluck/my-pluck.wrangler.jsonc` (non-secret config)
+- `.pluck/my-pluck.env` (ignored, mode 0600: URL, control/owner tokens, namespace, mainline name)
 
-After setup, the CLI uses its local deployment configuration to provision workspaces. Add `.agent/context.md`, make a linear commit on `main`, and push it; its native Artifacts push event starts integration automatically.
+The CLI loads the `.env` automatically when there is only one deployment; otherwise set `PLUCK_CONFIG`. Rerun with the same name to reuse resources. `CLOUDFLARE_API_TOKEN` is reused as the runtime subscription-management secret, or you are prompted for `PLUCK_RUNTIME_CLOUDFLARE_API_TOKEN`.
+
+Unattended setup: `--yes --name my-pluck` with `CLOUDFLARE_API_TOKEN`. Optionally set `PLUCK_API_TOKEN`, `BOOTSTRAP_TOKEN`, `PLUCK_OWNER_TOKEN` for stable values, and `CLOUDFLARE_ACCOUNT_ID` if Wrangler can't infer the account.
+
+## Demo: two agents, one conflict
 
 ```sh
 npm run pluck -- create agent-a
 npm run pluck -- create agent-b
 ```
 
-## Demo: two agents, one conflict
+Each returns an Artifacts `remote` and short-lived Git `token`.
 
-This walkthrough shows concurrent agents, clean integration, conflict capture, and resolution:
+1. Clone both. In each, add `.agent/context.md`, edit the same lines of the same file, commit, push to `main`.
+2. The first push integrates: `npm run pluck -- jobs` shows `integrated` and mainline gains a commit with `Agent-*` trailers.
+3. The second is recorded as a `conflict` (`npm run pluck -- conflicts`); nothing is pushed.
+4. `npm run pluck -- review <job-id>` clones mainline into a disposable worktree, cherry-picks the agent commit so you can resolve it with normal Git, and submits the resulting patch for the same validation. Use `--keep` to retain the worktree, `--no-editor` to skip `$EDITOR`. Review needs `PLUCK_NAMESPACE` and `PLUCK_MAINLINE_REPO`.
 
-1. Provision two isolated workspaces: `npm run pluck -- create agent-a` and `npm run pluck -- create agent-b`. Each returns its own Artifacts `remote` and short-lived Git `token`.
-2. Clone both. In each, add `.agent/context.md` explaining the change, edit the same lines of the same file, commit, and push to `main`.
-3. Whichever push lands first integrates cleanly: `npm run pluck -- jobs` shows it as `integrated`, and mainline gains a commit carrying `Agent-*` trailers.
-4. The other change no longer applies to the updated mainline and is recorded as a `conflict`; nothing is pushed. Inspect it with `npm run pluck -- conflicts`.
-5. Resolve it with `npm run pluck -- review <job-id>` (or an MCP client using `get_job` and `resolve_job`). The resolution is submitted as a patch and re-validated before it becomes a mainline commit.
+## CLI
 
-## Development checks
+```sh
+npm run pluck -- jobs
+npm run pluck -- status <job-id>
+npm run pluck -- retry <job-id>
+npm run pluck -- conflicts
+npm run pluck -- review <job-id>
+npm run pluck -- create <repo-name> [namespace]    # needs PLUCK_OWNER_TOKEN
+npm run pluck -- delete <repo-name> [namespace]    # removes subscription, keeps the repo
+npm run pluck -- destroy --name my-pluck --confirm my-pluck
+```
+
+`destroy` removes the Worker, mainline repo, D1 database, Queues, and generated config. Wrangler can't delete Artifacts namespaces, so the empty namespace is retained.
+
+## Docs
+
+- [HTTP API](docs/api.md)
+- [MCP server](docs/mcp.md)
+
+## Development
 
 ```sh
 npm run typecheck
@@ -57,122 +76,15 @@ npm run db:migrate:local
 npm run dev
 ```
 
-The probe reports whether the installed `isomorphic-git` version exposes a patch API. Run it in the same Node.js environment used for deployment or a recorded demo. The integrator intentionally fails closed when patch application is not proven: Pluck must not push a partially applied tree.
+`probe` reports whether the installed `isomorphic-git` exposes a patch API. The integrator fails closed if patch application isn't proven, so it never pushes a partially applied tree. Git writes use `isomorphic-git` with the Workers HTTP adapter and an in-memory filesystem.
 
-## Operational notes
+## Live testing
 
-- Live integration tests must use a separate Worker deployment, Artifacts namespace/repository, D1 database, and Queue. A deployment targeting the repository name `mainline` is rejected unless `ALLOW_PRODUCTION_MAINLINE=true` is explicitly configured.
-- Artifacts event delivery is native Cloudflare Queue delivery; the Worker does not expose a public webhook or shared webhook secret.
-- `isomorphic-git` with the Workers web HTTP adapter and an in-memory filesystem provides the Git write path. The adapter is paired with the tested unified-diff application implementation in this repository.
-- The write adapter must push with `force: false` (never force-push). The D1 lease plus a single queue consumer serializes normal work; if the remote rejects the push as non-fast-forward, that rejection is the compare-and-swap signal. Re-read mainline, re-apply the patch, and retry.
+Use `wrangler.test.jsonc`, which targets separate resources (`pluck-mcp-test` Worker, `pluck-test` namespace, `pluck-test-mainline` repo, `pluck-test` D1, `pluck-test-integration` and `pluck-test-artifacts-events` Queues). Create workspaces via `POST /admin/workspaces`, not by hand. A deployment targeting a repo named `mainline` is rejected unless `ALLOW_PRODUCTION_MAINLINE=true`.
 
-## How integration works
-
-1. Cloudflare delivers `cf.artifacts.repo.pushed` events directly to the `pluck-artifacts-events` Queue through a repository-scoped event subscription.
-   Cloudflare authenticates this delivery; Pluck does not expose a public webhook or shared webhook secret.
-2. The event consumer validates the active registered workspace, namespace, main branch, and protected mainline rules, then deduplicates the event in D1 and enqueues it to `pluck-integration`.
-3. Require a linear source commit with exactly one parent matching the push `before` SHA. Read the source commit, source tree, and current mainline tree through the Artifacts binding.
-4. Apply the single-commit diff to current mainline HEAD.
-5. Require `.agent/context.md`.
-6. Create a new mainline commit with `Agent-Task`, `Agent-Workspace`, `Agent-Source-Commit`, and `Agent-Context` trailers.
-7. Push only after the complete tree is available; otherwise record a conflict and push nothing.
-
-## Control API and CLI
-
-Workspace agents continue to use normal Git commits and pushes. The Artifacts push event is the automatic delivery signal; Pluck does not require a second submit call for a successful push.
-
-### Optional MCP access
-
-The MCP server is a convenience interface for coding agents, not the primary write path. It adapts the authenticated control API into tools for inspecting jobs and queue health and for authorized recovery actions. Git pushes, native Artifacts events, and Pluck's validation pipeline remain the way changes enter mainline.
-
-The MCP adapter never writes to Git directly. Resolutions are submitted as patches and go through the same source-parent, context, trailer, patch, and compare-and-swap validation as any other change; mainline is never force-pushed.
-
-Run the local stdio MCP server with the same deployment configuration as the CLI. It loads the sole `.pluck/*.env` file automatically, or use `PLUCK_CONFIG` to select one explicitly. `PLUCK_URL` and `PLUCK_TOKEN` are required; set `PLUCK_OWNER_TOKEN` only when the MCP client should manage workspaces.
-
-```sh
-npm run mcp
-```
-
-For an MCP client that runs project commands through `npx`, configure it with:
-
-```json
-{
-  "mcpServers": {
-    "pluck": {
-      "command": "npx",
-      "args": ["tsx", "scripts/mcp.ts"],
-      "cwd": "/path/to/pluck"
-    }
-  }
-}
-```
-
-The server provides `list_jobs`, `get_job`, `get_queue_status`, `retry_job`, and `resolve_job`. When `PLUCK_OWNER_TOKEN` is configured, it also provides `create_workspace` and `delete_workspace`.
-
-The Worker exposes an authenticated read/recovery API for the CLI, MCP adapter, and other human or automated clients:
-
-- `GET /api/jobs?limit=25` lists recent integration jobs.
-- `GET /api/queue` returns D1-backed counts by job status.
-- `GET /api/jobs/:id` returns status, attempts, commit details, and conflict detail.
-- `POST /api/jobs` submits a registered workspace commit event idempotently.
-- `POST /api/jobs/:id/retry` requeues a terminal conflict or blocked job without bypassing validation.
-- `POST /api/jobs/:id/resolve` accepts a unified resolution patch and requeues the job; normal source-parent, context, patch, and CAS validation still applies.
-
-Workspace lifecycle callers use owner-authenticated endpoints to manage native subscriptions. Provisioning creates the repository first, then the subscription and D1 record; failures clean up resources created during the attempt.
-
-- `POST /admin/workspaces` creates an Artifacts repository, creates its repository-scoped Queue subscription, and persists the subscription ID in D1.
-- `DELETE /admin/workspaces/:namespace/:repo` deletes the Cloudflare subscription and deactivates the workspace.
-
-Set the `PLUCK_API_TOKEN` Worker secret to enable the jobs API. Set `BOOTSTRAP_TOKEN` for `/admin/repos`. Workspace lifecycle requests use an owner bearer token: configure `WORKSPACE_OWNER_TOKENS` as a Worker secret JSON object mapping tokens to stable owner IDs; `ownerId` is derived server-side and is not accepted from request bodies. Configure `CLOUDFLARE_API_TOKEN` with account-scoped Workers Queues write access for subscription management.
-
-The CLI is a thin client over these routes:
-
-```sh
-PLUCK_URL=https://pluck.example.workers.dev PLUCK_TOKEN=... npm run pluck -- jobs
-PLUCK_URL=https://pluck.example.workers.dev PLUCK_TOKEN=... npm run pluck -- status pluck/task-1:commit
-PLUCK_URL=https://pluck.example.workers.dev PLUCK_TOKEN=... npm run pluck -- retry pluck/task-1:commit
-```
-
-Clean agent changes integrate automatically. Review conflicts locally with standard Git tooling rather than constructing a patch by hand:
-
-```sh
-export PLUCK_NAMESPACE=pluck
-export PLUCK_MAINLINE_REPO=pluck-mainline
-npm run pluck -- conflicts
-npm run pluck -- review pluck/task-1:commit
-```
-
-`review` issues short-lived read tokens through the authenticated Wrangler CLI, clones current mainline to a disposable local worktree, and cherry-picks the agent commit. Resolve any normal Git conflict, continue the cherry-pick, then confirm the generated patch. Pluck remains the only process that writes mainline. Use `--keep` to retain a worktree or `--no-editor` to skip launching `$EDITOR`.
-
-Deactivate a workspace and remove its native event subscription with `npm run pluck -- delete <repo-name> [namespace]`. This retains the Artifacts repository. To permanently remove a Pluck deployment's Worker, mainline repository, D1 database, Queues, and generated config, use an explicit name-matching confirmation:
-
-```sh
-npm run pluck -- destroy --name my-pluck --confirm my-pluck
-```
-
-`destroy` removes the Worker from both Queue consumers before deleting it. Cloudflare's Wrangler CLI does not support deleting Artifacts namespaces, so the command deliberately retains the empty namespace.
-
-Create a workspace repository with the owner credential:
-
-```sh
-export PLUCK_OWNER_TOKEN='your-workspace-owner-token'
-npm run pluck -- create my-new-repo
-npm run pluck -- create my-new-repo pluck
-```
-
-The command returns the provisioned Artifacts `remote` and short-lived Git `token`. Use those values to clone or set a Git remote, add `.agent/context.md`, and push a linear commit to `main`.
-
-The API is intentionally read-first. It cannot create commits directly or force-push mainline; the only write-adjacent operations (`retry` and `resolve`) requeue work through the same validation pipeline. The MCP adapter is a local stdio process that exposes these same operations and adds no separate write path.
-
-## Isolated test app
-
-Use `wrangler.test.jsonc` for live integration testing. It targets the separate `pluck-mcp-test` Worker, `pluck-test` Artifacts namespace, `pluck-test-mainline` repository, `pluck-test` D1 database, `pluck-test-integration` Queue, and `pluck-test-artifacts-events` Queue. Provision workspace repositories and their repository-scoped subscriptions through `POST /admin/workspaces`; do not create the subscription manually. Never point this config at the production `mainline` repository or production bindings.
-
-After the test resources exist and the D1 ID and event queue ID are configured:
+Once the D1 ID and event queue ID are configured:
 
 ```sh
 npm run db:migrate:test
 npm run deploy:test
 ```
-
-The Worker uses the returned Git remote and short-lived token with a Workers-compatible Git writer. It retries stale compare-and-swap pushes three times, persists each attempt in D1, and records exhaustion as a terminal `conflict`. Every successful commit includes structured `Agent-*` trailers, and no remote push is forced.

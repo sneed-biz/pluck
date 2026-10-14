@@ -1,12 +1,22 @@
 # Pluck
 
-Pluck is a coordination layer for Cloudflare Artifacts. This repository contains the patch integration spike and the first Cloudflare Worker vertical slice. Its primary workflow is normal Git pushes with Cloudflare-native event delivery; an optional MCP server provides an agent-facing adapter for control and recovery operations.
+Pluck lets coding agents work concurrently in isolated Cloudflare Artifacts repositories while safely integrating their changes into a shared mainline. Agents use normal Git; Pluck supplies native event delivery, conflict-safe integration, and per-change provenance.
 
 Pluck is inspired by Cloudflare's [Artifacts Git platform](https://blog.cloudflare.com/next-git-platform-on-cloudflare/). The implementation in this repository is independently authored and is licensed under the MIT License.
 
-## Quickstart
+Built for Cloudflare's [next Git platform competition](https://blog.cloudflare.com/next-git-platform-on-cloudflare/).
 
-Pluck coordinates concurrent agent changes in isolated Cloudflare Artifacts repositories and integrates valid commits into a shared mainline repository. It is built for Cloudflare's [next Git platform competition](https://blog.cloudflare.com/next-git-platform-on-cloudflare/).
+## Why Pluck
+
+Pluck is not a second Git hosting UI or an agent wrapper around an existing forge. It makes the agent workspace, change rationale, delivery signal, and integration result explicit parts of the Git workflow:
+
+- Each agent works in an isolated Artifacts repository, so concurrent work never shares a branch or working tree.
+- Every proposed change includes `.agent/context.md`; Pluck records that rationale in structured `Agent-*` trailers on the integrated mainline commit.
+- A native `cf.artifacts.repo.pushed` event starts integration after an ordinary Git push. There is no webhook endpoint or separate submit step.
+- Pluck applies a linear single-commit change to current mainline with compare-and-swap semantics. A stale or conflicting change is recorded for review, never force-pushed or partially applied.
+- The conflict-review command recreates the merge locally in a disposable worktree, then submits the resulting unified patch to Pluck for the same validation pipeline.
+
+## Quickstart
 
 You need a Cloudflare Workers Paid plan with Artifacts access, Node.js, Git, and either an authenticated Wrangler session (`npx wrangler login`) or a `CLOUDFLARE_API_TOKEN` with access to your target account.
 
@@ -37,7 +47,7 @@ npm run db:migrate:local
 npm run dev
 ```
 
-The probe reports whether the installed `isomorphic-git` version exposes a patch API. The integrator intentionally fails closed when patch application is not proven. That is a deadline gate: Pluck must not push a partially applied tree.
+The probe reports whether the installed `isomorphic-git` version exposes a patch API. Run it in the same Node.js environment used for deployment or a recorded demo. The integrator intentionally fails closed when patch application is not proven: Pluck must not push a partially applied tree.
 
 ## Operational notes
 
@@ -65,7 +75,7 @@ Workspace agents continue to use normal Git commits and pushes. The Artifacts pu
 
 The MCP server is a convenience interface for coding agents, not the primary write path. It adapts the authenticated control API into tools for inspecting jobs and queue health and for authorized recovery actions. Git pushes, native Artifacts events, and Pluck's validation pipeline remain the way changes enter mainline.
 
-The MCP adapter will not create commits, force-push mainline, or bypass source-parent, context, trailer, patch, or compare-and-swap validation.
+The MCP adapter does not create commits, force-push mainline, or bypass source-parent, context, trailer, patch, or compare-and-swap validation.
 
 Run the local stdio MCP server with the same deployment configuration as the CLI. It loads the sole `.pluck/*.env` file automatically, or use `PLUCK_CONFIG` to select one explicitly. `PLUCK_URL` and `PLUCK_TOKEN` are required; set `PLUCK_OWNER_TOKEN` only when the MCP client should manage workspaces.
 

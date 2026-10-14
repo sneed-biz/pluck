@@ -37,6 +37,16 @@ npm run pluck -- create agent-a
 npm run pluck -- create agent-b
 ```
 
+## Demo: two agents, one conflict
+
+This walkthrough shows concurrent agents, clean integration, conflict capture, and resolution:
+
+1. Provision two isolated workspaces: `npm run pluck -- create agent-a` and `npm run pluck -- create agent-b`. Each returns its own Artifacts `remote` and short-lived Git `token`.
+2. Clone both. In each, add `.agent/context.md` explaining the change, edit the same lines of the same file, commit, and push to `main`.
+3. Whichever push lands first integrates cleanly: `npm run pluck -- jobs` shows it as `integrated`, and mainline gains a commit carrying `Agent-*` trailers.
+4. The other change no longer applies to the updated mainline and is recorded as a `conflict`; nothing is pushed. Inspect it with `npm run pluck -- conflicts`.
+5. Resolve it with `npm run pluck -- review <job-id>` (or an MCP client using `get_job` and `resolve_job`). The resolution is submitted as a patch and re-validated before it becomes a mainline commit.
+
 ## Development checks
 
 ```sh
@@ -56,7 +66,7 @@ The probe reports whether the installed `isomorphic-git` version exposes a patch
 - `isomorphic-git` with the Workers web HTTP adapter and an in-memory filesystem provides the Git write path. The adapter is paired with the tested unified-diff application implementation in this repository.
 - The write adapter must push with `force: false` (never force-push). The D1 lease plus a single queue consumer serializes normal work; if the remote rejects the push as non-fast-forward, that rejection is the compare-and-swap signal. Re-read mainline, re-apply the patch, and retry.
 
-## Intended integration flow
+## How integration works
 
 1. Cloudflare delivers `cf.artifacts.repo.pushed` events directly to the `pluck-artifacts-events` Queue through a repository-scoped event subscription.
    Cloudflare authenticates this delivery; Pluck does not expose a public webhook or shared webhook secret.
@@ -75,7 +85,7 @@ Workspace agents continue to use normal Git commits and pushes. The Artifacts pu
 
 The MCP server is a convenience interface for coding agents, not the primary write path. It adapts the authenticated control API into tools for inspecting jobs and queue health and for authorized recovery actions. Git pushes, native Artifacts events, and Pluck's validation pipeline remain the way changes enter mainline.
 
-The MCP adapter does not create commits, force-push mainline, or bypass source-parent, context, trailer, patch, or compare-and-swap validation.
+The MCP adapter never writes to Git directly. Resolutions are submitted as patches and go through the same source-parent, context, trailer, patch, and compare-and-swap validation as any other change; mainline is never force-pushed.
 
 Run the local stdio MCP server with the same deployment configuration as the CLI. It loads the sole `.pluck/*.env` file automatically, or use `PLUCK_CONFIG` to select one explicitly. `PLUCK_URL` and `PLUCK_TOKEN` are required; set `PLUCK_OWNER_TOKEN` only when the MCP client should manage workspaces.
 
@@ -113,14 +123,14 @@ Workspace lifecycle callers use owner-authenticated endpoints to manage native s
 - `POST /admin/workspaces` creates an Artifacts repository, creates its repository-scoped Queue subscription, and persists the subscription ID in D1.
 - `DELETE /admin/workspaces/:namespace/:repo` deletes the Cloudflare subscription and deactivates the workspace.
 
-Set the `PLUCK_API_TOKEN` Worker secret to enable the jobs API. Set `BOOTSTRAP_TOKEN` for `/admin/repos`, and configure `WORKSPACE_OWNER_TOKENS` for workspace lifecycle requests. The CLI is a thin client over the jobs routes:
+Set the `PLUCK_API_TOKEN` Worker secret to enable the jobs API. Set `BOOTSTRAP_TOKEN` for `/admin/repos`. Workspace lifecycle requests use an owner bearer token: configure `WORKSPACE_OWNER_TOKENS` as a Worker secret JSON object mapping tokens to stable owner IDs; `ownerId` is derived server-side and is not accepted from request bodies. Configure `CLOUDFLARE_API_TOKEN` with account-scoped Workers Queues write access for subscription management.
 
-Workspace lifecycle requests use an owner bearer token. Configure `WORKSPACE_OWNER_TOKENS` as a Worker secret JSON object mapping tokens to stable owner IDs; `ownerId` is derived server-side and is not accepted from request bodies. The bootstrap token remains reserved for `/admin/repos`. Configure `CLOUDFLARE_API_TOKEN` with account-scoped Workers Queues write access for subscription management.
+The CLI is a thin client over these routes:
 
 ```sh
-PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck -- jobs
-PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck -- status pluck/task-1:commit
-PLUCK_URL=https://pluck-mcp.example.workers.dev PLUCK_TOKEN=... npm run pluck -- retry pluck/task-1:commit
+PLUCK_URL=https://pluck.example.workers.dev PLUCK_TOKEN=... npm run pluck -- jobs
+PLUCK_URL=https://pluck.example.workers.dev PLUCK_TOKEN=... npm run pluck -- status pluck/task-1:commit
+PLUCK_URL=https://pluck.example.workers.dev PLUCK_TOKEN=... npm run pluck -- retry pluck/task-1:commit
 ```
 
 Clean agent changes integrate automatically. Review conflicts locally with standard Git tooling rather than constructing a patch by hand:
@@ -152,7 +162,7 @@ npm run pluck -- create my-new-repo pluck
 
 The command returns the provisioned Artifacts `remote` and short-lived Git `token`. Use those values to clone or set a Git remote, add `.agent/context.md`, and push a linear commit to `main`.
 
-The API is intentionally read-first. It cannot create commits, force-push mainline, or bypass source-parent, context, trailer, or patch validation. The MCP adapter exposes these same operations to agents without creating a competing write path.
+The API is intentionally read-first. It cannot create commits directly or force-push mainline; the only write-adjacent operations (`retry` and `resolve`) requeue work through the same validation pipeline. The MCP adapter is a local stdio process that exposes these same operations and adds no separate write path.
 
 ## Isolated test app
 
